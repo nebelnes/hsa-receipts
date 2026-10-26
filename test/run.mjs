@@ -129,6 +129,30 @@ await step('ZIP is valid and readable by standard tools', async () => {
   assert.match(outp, /1,12\.50/);
 });
 
+console.log('PDF from photos');
+
+await step('photos become a valid multi-page PDF that standard tools can open', async () => {
+  const { makePdf, jpegSize } = await import('../public/static/pdf.js');
+  const jpg = new Uint8Array(await readFile(new URL('./fixtures/small.jpg', import.meta.url)));
+  const size = jpegSize(jpg);
+  assert.deepEqual(size, { width: 300, height: 400 });
+  const pdf = makePdf([{ jpeg: jpg, ...size }, { jpeg: jpg, ...size }], { title: '2026-09-14 CVS Pharmacy $12.50' });
+  const { writeFileSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const path = `${process.env.TMPDIR || '/tmp'}/hsa-test-${process.pid}.pdf`;
+  writeFileSync(path, pdf);
+  const info = execFileSync('pdfinfo', [path]).toString();
+  assert.match(info, /Pages:\s+2/);
+  assert.match(info, /Title:\s+2026-09-14 CVS Pharmacy \$12\.50/);
+  assert.match(info, /Page size:\s+612 x 792 pts \(letter\)/);
+  // Render page 1 and check the photo's dark frame is really there.
+  const png = execFileSync('pdftoppm', ['-r', '20', '-f', '1', '-l', '1', '-gray', '-png', path]);
+  assert.ok(png.length > 100);
+  const pgm = execFileSync('pdftoppm', ['-r', '20', '-f', '1', '-l', '1', '-gray', path]).toString('latin1');
+  const pixels = pgm.slice(pgm.lastIndexOf('\n255\n') + 5);
+  assert.ok([...pixels].some((c) => c.charCodeAt(0) < 100), 'the image shows up on the page');
+});
+
 console.log('Site');
 
 await step('home page starts empty with an Add button', async () => {

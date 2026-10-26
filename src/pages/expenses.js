@@ -277,6 +277,19 @@ function fileTiles(files, { manage = false, expenseId } = {}) {
     .join('')}</div>`;
 }
 
+// "Download as PDF": all of a receipt's photos in one PDF, made in the browser.
+function pdfButton(e, files) {
+  const photos = files.filter((f) => /^image\/(jpeg|png|webp)$/.test(f.type));
+  if (!photos.length) return '';
+  const others = files.length - photos.length;
+  const name = [e.service_date, e.provider, e.amount != null ? `$${Number(e.amount).toFixed(2)}` : '']
+    .filter(Boolean).join(' ').replace(/[^\w .$&()+-]/g, '').trim() || `receipt-${e.id}`;
+  return `<div style="margin:12px 0">
+    <button type="button" id="pdf-btn" data-files="${esc(JSON.stringify(photos.map((f) => `/files/${f.id}`)))}" data-name="${esc(name)}">📄 Download as PDF</button>
+    <p id="pdf-status" class="hint" role="status">${photos.length === 1 ? 'The photo' : `All ${photos.length} photos`} as one PDF, ready to attach to your HSA reimbursement.${others ? ` PDFs and other files above download separately.` : ''}</p>
+  </div>`;
+}
+
 export async function detailPage(env, user, url, id) {
   const e = await getExpense(env, id);
   if (!e) return null;
@@ -329,7 +342,7 @@ export async function detailPage(env, user, url, id) {
     </table>
     <a class="btn" href="/e/${id}/edit">Edit details</a></div>
     <h2>Files</h2>
-    <div class="card">${fileTiles(files, { manage: true, expenseId: id })}${proofTip}
+    <div class="card">${fileTiles(files, { manage: true, expenseId: id })}${pdfButton(e, files)}${proofTip}
       <form method="post" action="/e/${id}/files" enctype="multipart/form-data">
         <label for="more">Add more files</label>
         <input id="more" type="file" name="files" accept="image/*,application/pdf,.pdf,.heic" multiple required>
@@ -342,7 +355,7 @@ export async function detailPage(env, user, url, id) {
       <label class="small" style="font-weight:500"><input type="checkbox" name="confirm" value="1" required>Yes, delete this receipt and its files</label>
       <button class="danger small" type="submit">Delete receipt</button>
     </form>`;
-  return page({ title: e.provider || 'Receipt', user, body, flash: flashFrom(url) });
+  return page({ title: e.provider || 'Receipt', user, body, flash: flashFrom(url), scripts: ['/static/receipt-pdf.js'] });
 }
 
 export async function editPage(env, user, url, id) {
