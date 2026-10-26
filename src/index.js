@@ -206,22 +206,22 @@ async function handle(request, env) {
   }
   // ----- OneDrive backup -----
   if (path === '/onedrive/connect' && method === 'GET') {
-    if (!onedrive.configured(env)) return redirect(withMsg('/settings#backup', 'OneDrive backup is not set up yet (see SETUP.md).', 'bad'));
+    if (!onedrive.configured(env)) return redirect(`${withMsg('/settings', 'OneDrive backup is not set up yet (see SETUP.md).', 'bad')}#backup`);
     return redirect(await onedrive.connectUrl(env));
   }
   if (path === '/onedrive/callback' && method === 'GET') {
     const r = await onedrive.finishConnect(env, url);
-    if (r.error) return redirect(withMsg('/settings#backup', `OneDrive: ${r.error}`, 'bad'));
+    if (r.error) return redirect(`${withMsg('/settings', `OneDrive: ${r.error}`, 'bad')}#backup`);
     const b = await onedrive.runBackup(env);
-    return redirect(withMsg('/settings#backup', b.error ? `Connected, but the first backup failed: ${b.error}` : `OneDrive connected. Backed up ${b.copied} file${b.copied === 1 ? '' : 's'}${b.left ? `; ${b.left} more go tonight` : ''}.`, b.error ? 'warn' : 'ok'));
+    return redirect(`${withMsg('/settings', b.error ? `Connected, but the first backup failed: ${b.error}` : `OneDrive connected. Backed up ${b.copied} file${b.copied === 1 ? '' : 's'}${b.left ? `; ${b.left} more go tonight` : ''}.`, b.error ? 'warn' : 'ok')}#backup`);
   }
   if (path === '/onedrive/backup' && method === 'POST') {
     const b = await onedrive.runBackup(env);
-    return redirect(withMsg('/settings#backup', b.error ? `Backup failed: ${b.error}` : `Backed up ${b.copied} new file${b.copied === 1 ? '' : 's'} and the receipt list.${b.left ? ` ${b.left} still waiting; press again or they go tonight.` : ''}`, b.error ? 'bad' : 'ok'));
+    return redirect(`${withMsg('/settings', b.error ? `Backup failed: ${b.error}` : `Backed up ${b.copied} new file${b.copied === 1 ? '' : 's'} and the receipt list.${b.left ? ` ${b.left} still waiting; press again or they go tonight.` : ''}`, b.error ? 'bad' : 'ok')}#backup`);
   }
   if (path === '/onedrive/disconnect' && method === 'POST') {
     await onedrive.disconnect(env);
-    return redirect(withMsg('/settings#backup', 'OneDrive disconnected. Files already backed up stay there.'));
+    return redirect(`${withMsg('/settings', 'OneDrive disconnected. Files already backed up stay there.')}#backup`);
   }
 
   if (path === '/settings') {

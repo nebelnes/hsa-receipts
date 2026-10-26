@@ -852,6 +852,7 @@ await step('connect OneDrive, back up files and the list, nightly run, expired s
 
     // Back up now: the rest; then nothing new.
     const now1 = await req('POST', '/onedrive/backup', {}, {}, odEnv);
+    assert.match(now1.location, /^\/settings\?msg=[^#]+&kind=ok#backup$/, 'message survives the jump to the backup box');
     assert.match(msgOf(now1.location), /Backed up \d+ new file/);
     while (q('SELECT COUNT(*) n FROM files WHERE backup_at IS NULL')[0].n) await req('POST', '/onedrive/backup', {}, {}, odEnv);
     const before = uploads.size;
