@@ -19,6 +19,9 @@ so they can be reimbursed from the HSA later, even years later.
   Paid with the HSA card → marked as such (nothing to reimburse).
 - **Proof**: attach the itemized bill, insurance EOB and proof of payment to one
   receipt and label each file.
+- **Duplicate check**: flags receipts that look like the same expense (same
+  file, same emailed receipt, same date and amount, or same provider and amount
+  within a week) so nothing is reimbursed twice. "Not a duplicate" dismisses it.
 - **Export**: CSV list, and one ZIP of every file in folders by year.
 - **Private**: Cloudflare Access (one-time email codes) in front, and the code
   checks the sign-in token again on every request, files included.

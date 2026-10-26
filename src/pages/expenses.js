@@ -6,6 +6,7 @@ import { esc, moneyExact, isDate, today, niceDate, num, list, splitList } from '
 import { page, errorPage, flashFrom } from '../views/layout.js';
 import { saveFiles, filesFor, countUploads, KINDS, deleteExpenseFiles } from '../files.js';
 import { getAccounts, accountForUser, accountName, validAccount } from '../accounts.js';
+import { duplicateMap, duplicatesOf, forgetPairs } from '../dups.js';
 
 export const CATEGORIES = [
   'Doctor visit',
@@ -69,7 +70,7 @@ const isHsaCard = (paidWith) => /\bHSA\b/i.test(String(paidWith || ''));
 // ---------- List ----------
 
 export async function listPage(env, user, url) {
-  const status = ['open', 'reimbursed', 'draft', 'all'].includes(url.searchParams.get('status')) ? url.searchParams.get('status') : 'open';
+  const status = ['open', 'reimbursed', 'draft', 'dups', 'all'].includes(url.searchParams.get('status')) ? url.searchParams.get('status') : 'open';
   const yearParam = url.searchParams.get('year') || 'all';
   const year = /^\d{4}$/.test(yearParam) ? yearParam : 'all';
   const person = url.searchParams.get('person') || '';
@@ -77,14 +78,16 @@ export async function listPage(env, user, url) {
   const acct = validAccount(accounts, url.searchParams.get('acct')) || '';
   const multi = accounts.length > 1;
 
+  const dups = await duplicateMap(env);
   const where = [];
   const args = [];
+  if (status === 'dups') where.push(dups.size ? `id IN (${[...dups.keys()].map(Number).join(',')})` : '0');
   if (acct) {
     where.push('account = ?');
     args.push(acct);
   }
   if (status === 'reimbursed') where.push(`status IN ('reimbursed','hsa_paid')`);
-  else if (status !== 'all') {
+  else if (status !== 'all' && status !== 'dups') {
     where.push('status = ?');
     args.push(status);
   }
@@ -115,7 +118,7 @@ export async function listPage(env, user, url) {
   const opt = (v, label, cur) => `<option value="${esc(v)}" ${String(cur) === String(v) ? 'selected' : ''}>${esc(label)}</option>`;
   const filters = `<form class="card filters" method="get" action="/">
     <div><label for="f-status">Show</label><select id="f-status" name="status" onchange="this.form.submit()">
-      ${opt('open', 'Not reimbursed', status)}${opt('draft', 'Needs details', status)}${opt('reimbursed', 'Reimbursed', status)}${opt('all', 'All', status)}</select></div>
+      ${opt('open', 'Not reimbursed', status)}${opt('draft', 'Needs details', status)}${opt('reimbursed', 'Reimbursed', status)}${dups.size || status === 'dups' ? opt('dups', 'Possible duplicates', status) : ''}${opt('all', 'All', status)}</select></div>
     ${multi ? `<div><label for="f-acct">HSA</label><select id="f-acct" name="acct" onchange="this.form.submit()">${opt('', 'Both', acct)}${accounts.map((a) => opt(a.id, a.name, acct)).join('')}</select></div>` : ''}
     <div><label for="f-year">Year</label><select id="f-year" name="year" onchange="this.form.submit()">${opt('all', 'All years', year)}${years.map((y) => opt(y, y, year)).join('')}</select></div>
     ${people.length ? `<div><label for="f-person">Person</label><select id="f-person" name="person" onchange="this.form.submit()">${opt('', 'Everyone', person)}${people.map((p) => opt(p, p, person)).join('')}</select></div>` : ''}
@@ -131,7 +134,7 @@ export async function listPage(env, user, url) {
             (r) => `<tr>
           ${bulk ? `<td><input type="checkbox" name="ids" value="${r.id}" form="bulk" data-amount="${Number(r.amount) || 0}" aria-label="Select"></td>` : ''}
           <td class="nowrap">${esc(shortDate(r.service_date) || '—')}</td>
-          <td><a href="/e/${r.id}">${esc(r.provider || 'Untitled receipt')}</a></td>
+          <td><a href="/e/${r.id}">${esc(r.provider || 'Untitled receipt')}</a>${dups.has(r.id) ? ' <span class="chip bad">Duplicate?</span>' : ''}</td>
           ${multi && !acct
             ? `<td>${esc(accountName(accounts, r.account))}</td><td class="hide-sm">${esc(r.patient || '')}</td>`
             : `<td>${esc(r.patient || '')}</td><td class="hide-sm">${esc(r.category || '')}</td>`}
@@ -142,7 +145,7 @@ export async function listPage(env, user, url) {
           .join('')}</tbody>
         <tfoot><tr>${bulk ? '<td></td>' : ''}<td colspan="3"><strong>${rows.length} receipt${rows.length === 1 ? '' : 's'}</strong></td><td class="hide-sm"></td><td class="num"><strong>${moneyExact(total)}</strong></td>${status === 'open' ? '' : '<td></td>'}<td class="hide-sm"></td></tr></tfoot>
       </table></div>`
-    : `<div class="card"><p class="muted">${status === 'open' && year === 'all' && !person && !acct ?'No unreimbursed receipts yet. Tap <strong>Add receipt</strong> to save your first one.' : 'Nothing matches these filters.'}</p></div>`;
+    : `<div class="card"><p class="muted">${status === 'dups' ? 'No possible duplicates. 👍' : status === 'open' && year === 'all' && !person && !acct ?'No unreimbursed receipts yet. Tap <strong>Add receipt</strong> to save your first one.' : 'Nothing matches these filters.'}</p></div>`;
 
   const bulkForm = bulk
     ? `<form id="bulk" class="card" method="post" action="/reimburse">
@@ -187,6 +190,7 @@ export async function listPage(env, user, url) {
     </div>
     <a class="btn big" href="/new">＋ Add receipt</a>
     ${drafts.n && status !== 'draft' ? `<div class="banner warn">${drafts.n} receipt${drafts.n === 1 ? ' is' : 's are'} missing the date, provider or amount. <a href="/?status=draft">Finish ${drafts.n === 1 ? 'it' : 'them'}</a>.</div>` : ''}
+    ${dups.size && status !== 'dups' ? `<div class="banner bad">${dups.size} receipts look like possible duplicates. <a href="/?status=dups">Review them</a> so nothing is reimbursed twice.</div>` : ''}
     ${filters}${table}${bulkForm}${moveForm}`;
   return page({ title: 'Receipts', active: 'list', user, body, flash: flashFrom(url), scripts: bulk ? ['/static/list.js'] : [] });
 }
@@ -237,10 +241,10 @@ export async function createFromUpload(env, user, uploads, { allowEmpty = false,
   const acct = validAccount(accounts, account) || accountForUser(accounts, user);
   const r = await run(
     env,
-    `INSERT INTO expenses (status, created_by, account, service_date, provider, amount, category, paid_date, notes, ocr_text)
-     VALUES ('draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO expenses (status, created_by, account, service_date, provider, amount, category, paid_date, notes, ocr_text, source_hash)
+     VALUES ('draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     user || null, acct, fields.service_date || null, fields.provider || null, fields.amount ?? null,
-    fields.category || null, fields.paid_date || null, fields.notes || null, fields.ocr_text || null,
+    fields.category || null, fields.paid_date || null, fields.notes || null, fields.ocr_text || null, fields.source_hash || null,
   );
   const id = r.meta.last_row_id;
   if (!n) return { id, skipped: [] };
@@ -290,6 +294,27 @@ function pdfButton(e, files) {
   </div>`;
 }
 
+// Warning shown on a receipt that looks like another one.
+async function dupBanner(env, id) {
+  const twins = await duplicatesOf(env, id);
+  if (!twins.length) return '';
+  const others = await all(env, `SELECT * FROM expenses WHERE id IN (${twins.map((t) => Number(t.id)).join(',')})`);
+  const byId = new Map(others.map((o) => [o.id, o]));
+  const items = twins
+    .map((t) => {
+      const o = byId.get(t.id);
+      if (!o) return '';
+      const done = o.status === 'reimbursed' || o.status === 'hsa_paid';
+      const what = [o.provider || 'Untitled receipt', shortDate(o.service_date), o.amount != null ? moneyExact(o.amount) : ''].filter(Boolean).join(' · ');
+      return `<li><a href="/e/${o.id}">${esc(what)}</a> (${esc((STATUS[o.status] || STATUS.draft).label.toLowerCase())}): ${esc(t.reasons.join('; '))}.
+        ${done ? '<strong>That one is already reimbursed, so don\'t claim this again.</strong>' : ''}
+        <form class="inline" method="post" action="/e/${id}/notdup"><input type="hidden" name="other" value="${o.id}"><button class="small ghost">Not a duplicate</button></form></li>`;
+    })
+    .join('');
+  return `<div class="banner bad" id="dups"><strong>Possible duplicate.</strong> This looks like the same expense as:<ul class="small">${items}</ul>
+    <span class="small">If it really is the same, delete one of them (bottom of the receipt page) and keep the one with the most files.</span></div>`;
+}
+
 export async function detailPage(env, user, url, id) {
   const e = await getExpense(env, id);
   if (!e) return null;
@@ -327,6 +352,7 @@ export async function detailPage(env, user, url, id) {
 
   const body = `<p><a href="/">← Receipts</a></p>
     <h1>${esc(e.provider || 'Untitled receipt')} ${chip(e.status)}</h1>
+    ${await dupBanner(env, id)}
     ${money}
     <div class="card"><table>
       ${accounts.length > 1 ? field('HSA', esc(accountName(accounts, e.account))) : ''}
@@ -380,6 +406,7 @@ export async function editPage(env, user, url, id) {
 
   const body = `<p><a href="/e/${id}">← Back</a></p>
     <h1>${e.status === 'draft' ? 'Receipt details' : 'Edit receipt'}</h1>
+    ${await dupBanner(env, id)}
     ${reader}
     <form class="card" method="post" action="/e/${id}/edit" data-person-hsa="${esc(JSON.stringify(personHsa))}">
       ${accountPicker(accounts, e.account || accounts[0]?.id)}
@@ -518,6 +545,7 @@ export async function movePerson(env, form) {
 export async function deleteExpense(env, id, form) {
   if (form.confirm !== '1') return { error: 'Tick the box to confirm.' };
   await deleteExpenseFiles(env, id);
+  await forgetPairs(env, id);
   await run(env, 'DELETE FROM expenses WHERE id = ?', id);
   return { ok: true };
 }

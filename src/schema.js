@@ -44,6 +44,14 @@ const MIGRATIONS = [
     `UPDATE expenses SET account = '1' WHERE account IS NULL`,
     `CREATE INDEX IF NOT EXISTS expenses_account ON expenses(account, status)`,
   ],
+  // 3: duplicate checks — a fingerprint of each file and of emailed
+  //    e-receipts, and pairs someone confirmed are NOT duplicates
+  [
+    `ALTER TABLE files ADD COLUMN sha256 TEXT`,
+    `CREATE INDEX IF NOT EXISTS files_sha ON files(sha256)`,
+    `ALTER TABLE expenses ADD COLUMN source_hash TEXT`,
+    `CREATE TABLE IF NOT EXISTS not_duplicates (a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY (a, b))`,
+  ],
 ];
 
 let ready = false;

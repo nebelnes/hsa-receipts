@@ -34,6 +34,12 @@ export function fileType(f) {
   return BY_EXT[ext] || null;
 }
 
+export async function sha256Hex(data) {
+  const buf = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+  const h = await crypto.subtle.digest('SHA-256', buf);
+  return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 function cleanName(name, ext) {
   const base = String(name || '').split(/[\\/]/).pop().replace(/[^\w .()+-]/g, '_').trim().slice(0, 100);
   return base || `receipt.${ext}`;
@@ -60,13 +66,20 @@ export async function saveFiles(env, expenseId, uploads, kind = 'receipt') {
       continue;
     }
     const ext = TYPES[type];
-    const key = `receipts/${expenseId}/${crypto.randomUUID()}.${ext}`;
     const name = cleanName(f.name, ext);
-    await env.FILES.put(key, await f.arrayBuffer(), { httpMetadata: { contentType: type } });
+    const bytes = await f.arrayBuffer();
+    const sha = await sha256Hex(bytes);
+    // The same file twice on one receipt is never useful.
+    if (await one(env, 'SELECT id FROM files WHERE expense_id = ? AND sha256 = ?', expenseId, sha)) {
+      skipped.push(`${name}: already attached to this receipt`);
+      continue;
+    }
+    const key = `receipts/${expenseId}/${crypto.randomUUID()}.${ext}`;
+    await env.FILES.put(key, bytes, { httpMetadata: { contentType: type } });
     await run(
       env,
-      'INSERT INTO files (expense_id, r2_key, name, type, size, kind) VALUES (?, ?, ?, ?, ?, ?)',
-      expenseId, key, name, type, f.size, kind,
+      'INSERT INTO files (expense_id, r2_key, name, type, size, kind, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      expenseId, key, name, type, f.size, kind, sha,
     );
     saved++;
   }

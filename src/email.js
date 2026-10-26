@@ -8,7 +8,7 @@ import { parseEmail } from './mime.js';
 import { allowedEmails } from './auth.js';
 import { getAccounts } from './accounts.js';
 import { createFromUpload } from './pages/expenses.js';
-import { fileType } from './files.js';
+import { fileType, sha256Hex } from './files.js';
 import { parseReceipt } from '../public/static/parse.js';
 import { today } from './util.js';
 
@@ -54,6 +54,8 @@ export async function receiveEmail(message, env) {
     paid_date: files.length ? null : guess.date,
     notes: `Emailed: ${mail.subject || '(no subject)'}`.slice(0, 300),
     ocr_text: body || null,
+    // Fingerprint of an e-receipt in the body, to spot the same email sent twice.
+    source_hash: files.length ? null : await sha256Hex(`${mail.subject}\n${body}`.toLowerCase().replace(/^(fwd?|re):\s*/gm, '').replace(/^>+/gm, '').replace(/\s+/g, ' ').trim()),
   };
   const r = await createFromUpload(env, sender, files, { allowEmpty: true, fields });
   if (r.error) return { reject: r.error };

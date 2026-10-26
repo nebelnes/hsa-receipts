@@ -268,7 +268,7 @@ await step('file type and size limits', async () => {
 });
 
 await step('adding files later, labeling them, removing one', async () => {
-  const fd = upload(new File([PDF], 'card-statement.pdf', { type: 'application/pdf' }));
+  const fd = upload(new File([new TextEncoder().encode('%PDF-1.4\n% card statement\n%%EOF')], 'card-statement.pdf', { type: 'application/pdf' }));
   fd.append('kind', 'payment');
   const r = await req('POST', `/e/${firstId}/files`, fd);
   assert.match(msgOf(r.location), /Added 1 file/);
@@ -641,6 +641,75 @@ await step('email from strangers, spoofed senders or with nothing in it is refus
   assert.match(empty.rejected, /No receipt found/);
   const zip = await sendEmail(rawEmail({ parts: [`Content-Type: application/zip\r\nContent-Disposition: attachment; filename="a.zip"\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(JPEG)}`] }));
   assert.match(zip.rejected, /No receipt found/);
+});
+
+console.log('Duplicates');
+
+await step('duplicate rules: same file, same date+amount, similar provider nearby, different people', async () => {
+  const { compare, similarProvider } = await import('../src/dups.js');
+  assert.ok(similarProvider('CVS Pharmacy', 'CVS/pharmacy #X0043'));
+  assert.ok(similarProvider('Stonewalk Family Dentistry', 'STONEWALK DENTAL'));
+  assert.ok(!similarProvider('Stonewalk Family Dentistry', 'North American Dental Group'));
+  const base = { amount: 100, service_date: '2026-09-07', provider: 'CVS Pharmacy', patient: 'Mia' };
+  assert.deepEqual(compare(base, { ...base, provider: 'Walgreens' }), ['same date and amount']);
+  assert.deepEqual(compare(base, { ...base, service_date: '2026-09-10', provider: 'CVS #43' }), ['same provider and amount, 3 days apart']);
+  assert.deepEqual(compare(base, { ...base, service_date: '2026-10-07' }), [], 'monthly payments to the same place are fine');
+  assert.deepEqual(compare(base, { ...base, amount: 100.01 }), []);
+  assert.deepEqual(compare(base, { ...base, patient: 'Leo' }), [], 'two kids, same copay, same day');
+  assert.deepEqual(compare(base, { ...base, patient: '' }), ['same date and amount']);
+  assert.deepEqual(compare({ amount: null }, { amount: null }, { sharedFile: true }), ['same receipt file']);
+});
+
+await step('same photo uploaded twice is flagged; "Not a duplicate" clears it; deleting one clears it', async () => {
+  const photo = new TextEncoder().encode('\xff\xd8 dup-test photo \xff\xd9');
+  const a = Number((await req('POST', '/new', upload(new File([photo], 'a.jpg', { type: 'image/jpeg' })))).location.match(/\/e\/(\d+)\//)[1]);
+  const b = Number((await req('POST', '/new', upload(new File([photo], 'b.jpg', { type: 'image/jpeg' })))).location.match(/\/e\/(\d+)\//)[1]);
+  assert.match((await req('GET', `/e/${b}/edit?read=1`)).text, new RegExp(`Possible duplicate[\\s\\S]*href="/e/${a}"[\\s\\S]*same receipt file`));
+  assert.match((await req('GET', `/e/${a}`)).text, new RegExp(`href="/e/${b}"`));
+  const home = await req('GET', '/');
+  assert.match(home.text, /look like possible duplicates/);
+  const dupList = await req('GET', '/?status=dups');
+  assert.match(dupList.text, new RegExp(`href="/e/${a}"`));
+  assert.match(dupList.text, new RegExp(`href="/e/${b}"`));
+  assert.match(dupList.text, /Duplicate\?/);
+
+  const ok = await req('POST', `/e/${b}/notdup`, { other: String(a) });
+  assert.match(msgOf(ok.location), /kept as separate/);
+  assert.doesNotMatch((await req('GET', `/e/${b}`)).text, /Possible duplicate/);
+
+  // A different pair: same date and amount, typed in by hand.
+  const c = Number((await req('POST', '/new/blank', {})).location.match(/\/e\/(\d+)\//)[1]);
+  const d = Number((await req('POST', '/new/blank', {})).location.match(/\/e\/(\d+)\//)[1]);
+  for (const id of [c, d]) await req('POST', `/e/${id}/edit`, { service_date: '2026-03-03', provider: id === c ? 'Labcorp' : 'LabCorp of America', amount: '23.20' });
+  await req('POST', `/e/${c}/reimburse`, { reimbursed_date: '2026-03-10', reimbursed_amount: '23.20' });
+  const dv = await req('GET', `/e/${d}`);
+  assert.match(dv.text, /same date and amount/);
+  assert.match(dv.text, /already reimbursed, so don.t claim this again/);
+  await req('POST', `/e/${d}/delete`, { confirm: '1' });
+  assert.doesNotMatch((await req('GET', `/e/${c}`)).text, /Possible duplicate/);
+});
+
+await step('EOBs and statements shared by several receipts are not flagged', async () => {
+  const eob = new TextEncoder().encode('%PDF-1.4\n% one EOB, two visits\n%%EOF');
+  const ids = [];
+  for (const amt of ['40.00', '55.00']) {
+    const id = Number((await req('POST', '/new/blank', {})).location.match(/\/e\/(\d+)\//)[1]);
+    await req('POST', `/e/${id}/edit`, { service_date: amt === '40.00' ? '2026-04-01' : '2026-04-15', provider: 'Piedmont', amount: amt });
+    const fd = upload(new File([eob], 'eob.pdf', { type: 'application/pdf' }));
+    fd.append('kind', 'eob');
+    await req('POST', `/e/${id}/files`, fd);
+    ids.push(id);
+  }
+  for (const id of ids) assert.doesNotMatch((await req('GET', `/e/${id}`)).text, /Possible duplicate/);
+});
+
+await step('the same e-receipt emailed twice is flagged', async () => {
+  const html = '<p>Walgreens</p><p>Date 05/02/2026</p><p>Total $8.99</p>';
+  const send = (subject) => sendEmail(rawEmail({ subject, parts: [`Content-Type: text/html; charset=utf-8\r\n\r\n${html}`] }));
+  const one1 = (await send('Your Walgreens receipt')).created[0];
+  const two = (await send('Fwd: Your Walgreens receipt')).created[0];
+  assert.ok(one1.source_hash && one1.source_hash === two.source_hash);
+  assert.match((await req('GET', `/e/${two.id}`)).text, /same emailed receipt/);
 });
 
 // Optional: save rendered pages for a visual check (SNAPSHOT_DIR=/some/dir npm test).

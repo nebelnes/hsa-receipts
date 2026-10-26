@@ -9,6 +9,7 @@ import * as ex from './pages/expenses.js';
 import * as settings from './pages/settings.js';
 import { ICON_180, ICON_192, ICON_512 } from './icons.js';
 import { receiveEmail } from './email.js';
+import { markNotDuplicate } from './dups.js';
 
 const AUTH_MESSAGES = {
   'not-configured': 'The private sign-in isn\'t set up yet, so the site is locked. Finish the Cloudflare Access step in SETUP.md.',
@@ -154,6 +155,12 @@ async function handle(request, env) {
     const id = Number(p[1]);
     const r = await ex.deleteExpense(env, id, await readForm(request));
     return redirect(r.error ? withMsg(`/e/${id}`, r.error, 'bad') : withMsg('/', 'Receipt deleted.'));
+  }
+  if ((p = m(/^\/e\/(\d+)\/notdup$/)) && method === 'POST') {
+    const id = Number(p[1]);
+    const form = await readForm(request);
+    await markNotDuplicate(env, id, form.other);
+    return redirect(withMsg(`/e/${id}`, 'Got it, those two are kept as separate receipts.'));
   }
   if (path === '/move' && method === 'POST') {
     const r = await ex.movePerson(env, await readForm(request));
