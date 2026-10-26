@@ -31,6 +31,8 @@ async function upload() {
   inputs.forEach((i) => { i.disabled = true; });
   say(`Preparing ${files.length} file${files.length === 1 ? '' : 's'}…`);
   const fd = new FormData();
+  const acct = form.querySelector('input[name=account]:checked') || form.querySelector('input[name=account][type=hidden]');
+  if (acct) fd.append('account', acct.value);
   for (const f of files) {
     const s = await shrink(f);
     fd.append('files', s, s.name);

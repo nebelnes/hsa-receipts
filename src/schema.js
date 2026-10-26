@@ -38,6 +38,12 @@ const MIGRATIONS = [
     )`,
     `CREATE INDEX IF NOT EXISTS files_expense ON files(expense_id)`,
   ],
+  // 2: separate HSA accounts (one per spouse)
+  [
+    `ALTER TABLE expenses ADD COLUMN account TEXT`,
+    `UPDATE expenses SET account = '1' WHERE account IS NULL`,
+    `CREATE INDEX IF NOT EXISTS expenses_account ON expenses(account, status)`,
+  ],
 ];
 
 let ready = false;

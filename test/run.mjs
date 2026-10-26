@@ -60,6 +60,11 @@ const upload = (...files) => {
   return fd;
 };
 const TODAY = '2026-10-26';
+// Settings form fields for the HSA accounts: [id, name, email, provider, url]
+const accountsForm = (rows) => ({
+  acct_id: rows.map((r) => r[0]), acct_name: rows.map((r) => r[1]), acct_email: rows.map((r) => r[2]),
+  acct_provider: rows.map((r) => r[3]), acct_url: rows.map((r) => r[4]),
+});
 
 console.log('Receipt reading');
 
@@ -286,7 +291,7 @@ await step('list: totals, filters and marking several reimbursed at once', async
     await req('POST', `/e/${id}/edit`, { service_date: date, provider: prov, amount: amt, patient: who, paid_with: 'Aven' });
     ids.push(id);
   }
-  await req('POST', '/settings', { people: 'Alex, Max, Sam', paid_with: 'Aven, HSA card', hsa_name: 'Fidelity', hsa_url: 'https://www.fidelity.com' });
+  await req('POST', '/settings', { ...accountsForm([['1', 'Alex', 'me@x.test', 'Fidelity', 'https://www.fidelity.com']]), people: 'Alex, Max, Sam', paid_with: 'Aven, HSA card' });
   let home = await req('GET', '/');
   const open = q(`SELECT SUM(amount) s FROM expenses WHERE status = 'open'`)[0].s;
   assert.equal(open, 12.5 + 37.6 + 300 + 35);
@@ -317,9 +322,13 @@ await step('drafts are listed so nothing gets lost', async () => {
 });
 
 await step('settings validate the link and keep lists tidy', async () => {
-  let r = await req('POST', '/settings', { people: 'Alex, Max, Alex', paid_with: 'Aven', hsa_url: 'javascript:alert(1)' });
+  let r = await req('POST', '/settings', { ...accountsForm([['1', 'Alex', 'me@x.test', 'Fidelity', 'javascript:alert(1)']]), people: 'Alex', paid_with: 'Aven' });
   assert.match(msgOf(r.location), /https:\/\//);
-  r = await req('POST', '/settings', { people: 'Alex, Max, Alex', paid_with: 'Aven\nHSA card', hsa_name: 'Fidelity', hsa_url: '' });
+  r = await req('POST', '/settings', { ...accountsForm([['1', 'Alex', 'not-an-email', '', '']]), people: 'Alex', paid_with: 'Aven' });
+  assert.match(msgOf(r.location), /doesn't look like an email/);
+  r = await req('POST', '/settings', { ...accountsForm([['1', '', '', '', '']]), people: 'Alex', paid_with: 'Aven' });
+  assert.match(msgOf(r.location), /at least one HSA/);
+  r = await req('POST', '/settings', { ...accountsForm([['1', 'Alex', 'me@x.test', 'Fidelity', '']]), people: 'Alex, Max, Alex', paid_with: 'Aven\nHSA card' });
   assert.match(msgOf(r.location), /Settings saved/);
   const s = await req('GET', '/settings');
   assert.match(s.text, /value="Alex, Max"/);
@@ -335,16 +344,16 @@ await step('CSV export: all receipts, formula-safe', async () => {
   assert.equal(c.status, 200);
   assert.match(c.headers.get('Content-Disposition'), /attachment; filename="hsa-receipts-\d{4}-\d{2}-\d{2}\.csv"/);
   const lines = c.text.trim().split('\r\n');
-  assert.equal(lines[0], 'id,status,service_date,provider,patient,category,amount,paid_date,paid_with,reimbursed_date,reimbursed_amount,notes,files');
+  assert.equal(lines[0], 'id,hsa,status,service_date,provider,patient,category,amount,paid_date,paid_with,reimbursed_date,reimbursed_amount,notes,files');
   assert.match(c.text, /"'=HYPERLINK\(""x""\)"/);
   assert.match(c.text, /"line one, ""quoted"""/);
-  assert.match(c.text, /Reimbursed,2025-11-03,Northside Hospital,Alex,,300,/);
+  assert.match(c.text, /,Alex,Reimbursed,2025-11-03,Northside Hospital,Alex,,300,/);
 });
 
 await step('ZIP manifest: folders by year, one entry per file', async () => {
   const r = await req('GET', '/export/files.json');
   const m = JSON.parse(r.text);
-  assert.ok(m.csv.startsWith('id,status'));
+  assert.ok(m.csv.startsWith('id,hsa,status'));
   const n = q('SELECT COUNT(*) n FROM files')[0].n;
   assert.equal(m.files.length, n);
   assert.ok(m.files.some((f) => /^2026\/2026-09-14 CVS Pharmacy 4821 \$12\.50 #\d+\/1-IMG_2041\.jpg$/.test(f.path)), JSON.stringify(m.files.slice(0, 3)));
@@ -432,6 +441,145 @@ await step('Cloudflare Access sign-in is enforced, including for files and scrip
   assert.match(lr.text, /set up yet/);
   // The manifest and icons stay reachable so the phone can install the app.
   assert.equal((await req('GET', '/manifest.webmanifest', null, {}, aenv)).status, 200);
+});
+
+console.log('Two HSAs');
+
+await step('two HSA accounts: separate totals, filters, picker and export folders', async () => {
+  let r = await req('POST', '/settings', {
+    ...accountsForm([['1', 'Alex', 'me@x.test', 'Fidelity', 'https://www.fidelity.com'], ['2', 'Maria', 'wife@x.test', 'HealthEquity', 'https://www.healthequity.com'], ['3', '', '', '', '']]),
+    people: 'Alex, Maria, Max', paid_with: 'Aven, HSA card',
+  });
+  assert.match(msgOf(r.location), /Settings saved/);
+  // The add page offers both, with the signed-in person's own HSA picked.
+  const newPage = await req('GET', '/new', null, {}, { ...env });
+  assert.match(newPage.text, /Whose HSA\?/);
+  assert.match(newPage.text, /value="1" checked/);
+  // Upload into Maria's HSA.
+  const fd = upload(new File([PDF], 'eob.pdf', { type: 'application/pdf' }));
+  fd.append('account', '2');
+  r = await req('POST', '/new', fd);
+  const mid = Number(r.location.match(/\/e\/(\d+)\//)[1]);
+  assert.equal(q('SELECT account FROM expenses WHERE id = ?', mid)[0].account, '2');
+  await req('POST', `/e/${mid}/edit`, { account: '2', service_date: '2026-10-02', provider: 'Piedmont Urgent Care', amount: '75.00', patient: 'Maria' });
+  // Someone else's account number is ignored; a bogus one keeps the current account.
+  await req('POST', `/e/${mid}/edit`, { account: '9', service_date: '2026-10-02', provider: 'Piedmont Urgent Care', amount: '75.00', patient: 'Maria' });
+  assert.equal(q('SELECT account FROM expenses WHERE id = ?', mid)[0].account, '2');
+  const home = await req('GET', '/');
+  const alexOpen = q(`SELECT COALESCE(SUM(amount),0) s FROM expenses WHERE status='open' AND account='1'`)[0].s;
+  assert.match(home.text, new RegExp(`Alex can reimburse</div><div class="v">\\$${alexOpen.toFixed(2).replace('.', '\\.')}`));
+  assert.match(home.text, /Maria can reimburse<\/div><div class="v">\$75\.00/);
+  assert.match(home.text, /Both HSAs together/);
+  assert.match(home.text, /<th>HSA<\/th>/);
+  const onlyMaria = await req('GET', '/?status=open&acct=2');
+  assert.match(onlyMaria.text, /Piedmont Urgent Care/);
+  assert.ok(!/Northside|Smile Bright/.test(onlyMaria.text));
+  const det = await req('GET', `/e/${mid}`);
+  assert.match(det.text, /Reimbursed from Maria's HSA\?/);
+  assert.match(det.text, /href="https:\/\/www\.healthequity\.com"/);
+  const csv = await req('GET', '/export.csv');
+  assert.match(csv.text, /,Maria,Not reimbursed,2026-10-02,Piedmont Urgent Care,Maria,,75,/);
+  const m = JSON.parse((await req('GET', '/export/files.json')).text);
+  assert.ok(m.files.some((f) => f.path.startsWith('Maria HSA/2026/2026-10-02 Piedmont Urgent Care $75.00')), JSON.stringify(m.files.map((f) => f.path)));
+  assert.ok(m.files.some((f) => f.path.startsWith('Alex HSA/')));
+  const exp = await req('GET', '/export');
+  assert.match(exp.text, /<td>2026<\/td><td>Maria<\/td>/);
+  // An HSA that still has receipts can't be removed.
+  r = await req('POST', '/settings', { ...accountsForm([['1', 'Alex', 'me@x.test', '', '']]), people: 'Alex', paid_with: 'Aven' });
+  assert.match(msgOf(r.location), /Maria's HSA still has 1 receipt/);
+  r = await req('POST', '/settings', { ...accountsForm([['1', 'Alex', 'me@x.test', '', ''], ['2', 'Maria', 'me@x.test', '', '']]), people: 'Alex', paid_with: 'Aven' });
+  assert.match(msgOf(r.location), /different email/);
+});
+
+console.log('Email in');
+
+const VERIFIED = 'ARC-Authentication-Results: i=1; mx.cloudflare.net; dkim=pass header.d=x.test header.s=s1; dmarc=pass header.from=x.test policy.dmarc=reject; spf=pass smtp.mailfrom=wife@x.test';
+function rawEmail({ from = 'wife@x.test', subject = 'Fwd: Your statement', auth = VERIFIED, parts }) {
+  const b = 'BOUNDARY_abc123';
+  const head = [auth, `From: Maria <${from}>`, 'To: receipts@hsa.test', `Subject: ${subject}`, 'MIME-Version: 1.0'].filter(Boolean);
+  if (!parts) return `${head.join('\r\n')}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nhello\r\n`;
+  const body = parts.map((p) => `--${b}\r\n${p}`).join('\r\n') + `\r\n--${b}--\r\n`;
+  return `${head.join('\r\n')}\r\nContent-Type: multipart/mixed; boundary="${b}"\r\n\r\nThis is a multi-part message.\r\n${body}`;
+}
+const b64 = (bytes) => Buffer.from(bytes).toString('base64').replace(/.{76}/g, '$&\r\n');
+async function sendEmail(raw, from = 'wife@x.test', e = { ...env, ALLOWED_EMAILS: 'me@x.test, wife@x.test' }) {
+  const bytes = new TextEncoder().encode(raw);
+  const msg = { from, to: 'receipts@hsa.test', rawSize: bytes.length, raw: new Blob([bytes]).stream(), rejected: null, setReject(r) { this.rejected = r; } };
+  const before = q('SELECT COALESCE(MAX(id),0) m FROM expenses')[0].m;
+  await worker.email(msg, e);
+  const created = q('SELECT * FROM expenses WHERE id > ? ORDER BY id', before);
+  return { rejected: msg.rejected, created };
+}
+
+await step('emailed PDF bill lands in the sender\'s HSA with the file attached', async () => {
+  const pdfBytes = new TextEncoder().encode('%PDF-1.4\n%âãÏÓ\n1 0 obj\n<<>>\nendobj\n%%EOF\n');
+  const raw = rawEmail({
+    subject: '=?utf-8?Q?Fwd:_Statement_from_Piedmont_=E2=80=93_October?=',
+    parts: [
+      'Content-Type: multipart/alternative; boundary="ALT"\r\n\r\n--ALT\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nHi, see the attached bill =E2=80=93 thanks!\r\n--ALT\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Hi, see the attached bill</p>\r\n--ALT--',
+      `Content-Type: application/pdf; name="Statement Oct.pdf"\r\nContent-Disposition: attachment; filename*=utf-8''Statement%20Oct%E2%80%9926.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(pdfBytes)}`,
+      'Content-Type: image/png; name="logo.png"\r\nContent-Disposition: inline; filename="logo.png"\r\nContent-ID: <logo>\r\nContent-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=',
+    ],
+  });
+  const r = await sendEmail(raw);
+  assert.equal(r.rejected, null);
+  assert.equal(r.created.length, 1);
+  const e = r.created[0];
+  assert.equal(e.account, '2');
+  assert.equal(e.status, 'draft');
+  assert.equal(e.created_by, 'wife@x.test');
+  assert.match(e.notes, /^Emailed: Fwd: Statement from Piedmont – October$/);
+  const files = q('SELECT * FROM files WHERE expense_id = ?', e.id);
+  assert.equal(files.length, 1, 'the logo is skipped');
+  assert.equal(files[0].type, 'application/pdf');
+  assert.equal(files[0].name, 'Statement Oct’26.pdf'.replace('’', '_'));
+  const stored = env.FILES.objects.get(files[0].r2_key).bytes;
+  assert.deepEqual([...stored], [...pdfBytes]);
+  // Opening it reads the PDF.
+  const det = await req('GET', `/e/${e.id}`);
+  assert.match(det.text, /\/e\/\d+\/edit\?read=1/);
+});
+
+await step('emailed photo and an e-receipt in the email body', async () => {
+  const photo = await sendEmail(rawEmail({
+    from: 'me@x.test',
+    parts: [`Content-Type: image/jpeg\r\nContent-Disposition: attachment; filename="IMG_7781.JPG"\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(JPEG)}`],
+  }), 'me@x.test');
+  assert.equal(photo.rejected, null);
+  assert.equal(photo.created[0].account, '1');
+  assert.equal(q('SELECT type FROM files WHERE expense_id = ?', photo.created[0].id)[0].type, 'image/jpeg');
+
+  const html = '<html><body><h2>CVS Pharmacy</h2><table><tr><td>Fill Date</td><td>10/14/2026</td></tr><tr><td>Rx 0418823 Amoxicillin</td><td></td></tr><tr><td>Total</td><td>$12.50</td></tr></table><p>Thank you</p></body></html>';
+  const ereceipt = await sendEmail(rawEmail({
+    subject: 'Your CVS Pharmacy receipt',
+    parts: [`Content-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(new TextEncoder().encode(html))}`],
+  }));
+  assert.equal(ereceipt.rejected, null);
+  const e = ereceipt.created[0];
+  assert.equal(e.account, '2');
+  assert.equal(e.service_date, '2026-10-14');
+  assert.equal(e.amount, 12.5);
+  assert.equal(e.category, 'Pharmacy');
+  assert.match(e.provider, /CVS/);
+  assert.equal(e.status, 'draft', 'still waits for a check');
+  assert.match(e.ocr_text, /Amoxicillin/);
+});
+
+await step('email from strangers, spoofed senders or with nothing in it is refused', async () => {
+  const stranger = await sendEmail(rawEmail({ from: 'spam@evil.test', parts: [`Content-Type: application/pdf\r\nContent-Disposition: attachment; filename="x.pdf"\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(PDF)}`] }), 'spam@evil.test');
+  assert.match(stranger.rejected, /only accepts receipts from family/);
+  assert.equal(stranger.created.length, 0);
+  const spoof = await sendEmail(rawEmail({ auth: 'ARC-Authentication-Results: i=1; mx.cloudflare.net; dkim=fail; dmarc=fail header.from=x.test; spf=fail', parts: [`Content-Type: application/pdf\r\nContent-Disposition: attachment; filename="x.pdf"\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(PDF)}`] }));
+  assert.match(spoof.rejected, /Could not verify/);
+  assert.equal(spoof.created.length, 0);
+  const noAuth = await sendEmail(rawEmail({ auth: '', parts: [`Content-Type: application/pdf\r\nContent-Disposition: attachment; filename="x.pdf"\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(PDF)}`] }));
+  assert.match(noAuth.rejected, /Could not verify/);
+  const headerMismatch = await sendEmail(rawEmail({ from: 'spam@evil.test', parts: [`Content-Type: application/pdf\r\nContent-Disposition: attachment; filename="x.pdf"\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(PDF)}`] }), 'wife@x.test');
+  assert.match(headerMismatch.rejected, /only accepts receipts from family/);
+  const empty = await sendEmail(rawEmail({ parts: ['Content-Type: text/plain\r\n\r\nhi'] }));
+  assert.match(empty.rejected, /No receipt found/);
+  const zip = await sendEmail(rawEmail({ parts: [`Content-Type: application/zip\r\nContent-Disposition: attachment; filename="a.zip"\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(JPEG)}`] }));
+  assert.match(zip.rejected, /No receipt found/);
 });
 
 // Optional: save rendered pages for a visual check (SNAPSHOT_DIR=/some/dir npm test).

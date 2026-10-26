@@ -19,6 +19,11 @@ h2{font-size:1.15rem;margin:1.6rem 0 .6rem}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
 .stat .v{font-size:1.5rem;font-weight:700;font-variant-numeric:tabular-nums}
 .stat .k{color:var(--muted);font-size:.85rem}
+a.stat{display:block;text-decoration:none;color:var(--ink)}a.stat:hover{border-color:var(--accent)}
+fieldset.acct{border:1px solid var(--line);border-radius:10px;padding:6px 12px 10px;margin:0 0 10px;display:flex;gap:16px;flex-wrap:wrap}
+fieldset.acct legend{font-weight:600;font-size:.9rem;padding:0 4px}
+fieldset.acct label{display:flex;align-items:center;margin:0;font-weight:500;font-size:1rem}
+fieldset.acct input{width:auto;margin-right:6px}
 .muted{color:var(--muted)}.small{font-size:.875rem}
 .banner{border-radius:10px;padding:10px 14px;margin:0 0 12px;border:1px solid var(--line)}
 .banner.warn{background:var(--warnbg);color:var(--warn)}.banner.bad{background:var(--badbg);color:var(--bad)}.banner.ok{background:var(--okbg);color:var(--ok)}

@@ -8,6 +8,7 @@ import { serveFile, deleteFile, setKind } from './files.js';
 import * as ex from './pages/expenses.js';
 import * as settings from './pages/settings.js';
 import { ICON_180, ICON_192, ICON_512 } from './icons.js';
+import { receiveEmail } from './email.js';
 
 const AUTH_MESSAGES = {
   'not-configured': 'The private sign-in isn\'t set up yet, so the site is locked. Finish the Cloudflare Access step in SETUP.md.',
@@ -108,15 +109,16 @@ async function handle(request, env) {
 
   // ----- Adding receipts -----
   if (path === '/new' || path === '/share') {
-    if (method === 'GET') return path === '/share' ? redirect('/new') : out(ex.newPage(env, user, url), user);
+    if (method === 'GET') return path === '/share' ? redirect('/new') : out(await ex.newPage(env, user, url), user);
     const form = await readForm(request);
-    const r = await ex.createFromUpload(env, user, list(form.files));
+    const r = await ex.createFromUpload(env, user, list(form.files), { account: form.account });
     if (r.error) return redirect(withMsg('/new', r.error, 'bad'));
     const note = r.skipped.length ? `Some files were skipped: ${r.skipped.join('; ')}` : '';
     return redirect(note ? withMsg(`/e/${r.id}/edit?read=1`, note, 'warn') : `/e/${r.id}/edit?read=1`);
   }
   if (path === '/new/blank' && method === 'POST') {
-    const r = await ex.createFromUpload(env, user, [], { allowEmpty: true });
+    const form = await readForm(request);
+    const r = await ex.createFromUpload(env, user, [], { allowEmpty: true, account: form.account });
     return redirect(`/e/${r.id}/edit`);
   }
 
@@ -204,6 +206,22 @@ export default {
         page({ title: 'Error', body: `<h1>Something went wrong</h1><div class="card"><p>${esc(e.message)}</p><p><a href="/">Back to receipts</a></p></div>` }),
         500,
       );
+    }
+  },
+
+  // Cloudflare Email Routing hands emails sent to the receipts address here.
+  async email(message, env) {
+    try {
+      const r = await receiveEmail(message, env);
+      if (r.reject) {
+        console.log('email rejected', JSON.stringify({ from: message.from, reason: r.reject }));
+        message.setReject(r.reject);
+      } else {
+        console.log('email saved', JSON.stringify({ from: message.from, id: r.id, files: r.files }));
+      }
+    } catch (e) {
+      console.error('email failed', e);
+      message.setReject('Sorry, the receipt could not be saved. Please upload it on the site.');
     }
   },
 };

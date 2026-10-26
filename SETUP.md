@@ -48,7 +48,25 @@ iPhone: Safari → Share → **Add to Home Screen**. To scan, use the Files app
 (**⋯** → **Scan Documents**), save, then **Choose photos or PDFs** on the site.
 
 ## 6. Settings page
-Add family members' names, your HSA provider and its reimbursement page link.
+- **HSA accounts**: one per spouse: name, the email they use, HSA provider and
+  its reimbursement page. Each of you gets your own "can reimburse" total, and
+  new receipts go to the account of whoever adds or emails them.
+- Family members' names (patients) and the cards you pay with.
+
+## 7. Email in (forward receipts to receipts@muravskiy.org)
+Your domain → **Email** → **Email Routing** → **Routing rules** →
+**Create address**:
+- Custom address: `receipts`
+- Action: **Send to a Worker** → `hsa-receipts` → Save
+
+Forward bills, PDF invoices, photos or e-receipts there from your own email
+(or your wife's, once it's in Settings). Each email becomes a receipt in the
+sender's HSA. Emails from anyone else, or that Cloudflare can't verify, bounce
+back with a short reason. Free.
+
+## 8. Your wife's access
+Add her email to the **Family** policy in Zero Trust (shared with trips) and
+tell Claude, who adds it to `ALLOWED_EMAILS` in `wrangler.jsonc`.
 
 ## Costs
 - Worker, database, Access (up to 50 users): free.
