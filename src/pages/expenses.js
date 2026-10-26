@@ -295,7 +295,7 @@ export async function detailPage(env, user, url, id) {
       ${hsaUrl ? `<p class="hint">Request it at <a href="${esc(hsaUrl)}" target="_blank" rel="noopener">${esc(hsaName || 'your HSA')}</a>, then record it here.</p>` : ''}
       <div class="row">
         <div><label for="r-date">Date reimbursed</label><input id="r-date" type="date" name="reimbursed_date" value="${today()}" required></div>
-        <div><label for="r-amt">Amount</label><input id="r-amt" name="reimbursed_amount" inputmode="decimal" value="${e.amount ?? ''}" required></div>
+        <div><label for="r-amt">Amount</label><input id="r-amt" name="reimbursed_amount" inputmode="decimal" value="${e.amount != null ? Number(e.amount).toFixed(2) : ''}" required></div>
       </div>
       <button type="submit">Mark as reimbursed</button>
     </form>`;
@@ -373,7 +373,7 @@ export async function editPage(env, user, url, id) {
       ${accounts.length > 1 ? '<p id="acct-note" class="hint" role="status"></p>' : ''}
       <div class="row">
         <div><label for="service_date">Date of service</label><input id="service_date" type="date" name="service_date" value="${v('service_date')}"></div>
-        <div><label for="amount">Amount you paid ($)</label><input id="amount" name="amount" inputmode="decimal" placeholder="0.00" value="${e.amount ?? ''}"></div>
+        <div><label for="amount">Amount you paid ($)</label><input id="amount" name="amount" inputmode="decimal" placeholder="0.00" value="${e.amount != null ? Number(e.amount).toFixed(2) : ''}"></div>
       </div>
       <label for="provider">Provider or store</label>
       <input id="provider" name="provider" list="providers" autocomplete="off" value="${v('provider')}">${dl('providers', providers)}
