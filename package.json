@@ -1,0 +1,15 @@
+{
+  "name": "hsa-receipts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Family HSA receipt locker: scan or upload medical receipts, track what's been reimbursed.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --no-warnings test/run.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.45.0"
+  }
+}

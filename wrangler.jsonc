@@ -1,0 +1,34 @@
+{
+  // Cloudflare Worker settings for the HSA receipts site.
+  // Nothing secret lives here: sign-in is Cloudflare Access, and the values
+  // below are public identifiers.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hsa-receipts",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+
+  // The site lives only at hsa.muravskiy.org (created automatically on deploy).
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "hsa.muravskiy.org", "custom_domain": true }],
+
+  // Receipt list. Created on the first deploy; the site makes its own tables.
+  "d1_databases": [{ "binding": "DB", "database_name": "hsa-receipts" }],
+
+  // Receipt photos and PDFs (R2 free tier: 10 GB).
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "hsa-receipts" }],
+
+  // Page scripts (receipt reading, ZIP export). Served only after sign-in.
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+
+  "vars": {
+    // Same Cloudflare Access team as trips.muravskiy.org.
+    // ACCESS_AUD comes from the new "hsa" Access application (see SETUP.md).
+    "ACCESS_TEAM_DOMAIN": "morning-tree-1737.cloudflareaccess.com",
+    "ACCESS_AUD": "",
+    "ALLOWED_EMAILS": "nebelnes@gmail.com",
+    "SITE_URL": "https://hsa.muravskiy.org"
+  },
+
+  "observability": { "enabled": true }
+}

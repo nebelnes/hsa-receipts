@@ -1,0 +1,22 @@
+Alpharetta Pediatric Associates
+3400 Old Milton Pkwy Ste 200
+Alpharetta GA 30005
+
+PATIENT STATEMENT
+
+Statement Date: 10/02/2026
+
+Account: 0098812
+
+Patient: Max R.
+
+Date of Service 08/27/2026
+
+99213 Office visit est. patient $185.00
+Insurance Paid $121.40
+
+Insurance Adjustment $28.60
+Patient Responsibility $35.00
+Amount Due $35.00
+Please pay by 10/30/2026
+

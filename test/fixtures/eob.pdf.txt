@@ -1,0 +1,10 @@
+Explanation of Benefits
+THIS IS NOT A BILL
+Member: Alex R.   Claim #: 2026-0921-77341
+Provider: Northside Hospital Forsyth
+Dates of Service: 07/18/2026 - 07/18/2026
+Service   Billed   Allowed   Plan Paid   Your Responsibility
+Emergency room visit   1,842.00   912.35   612.35   300.00
+Total   1,842.00   912.35   612.35   300.00
+Amount you owe the provider: $300.00
+Statement date 08/02/2026
