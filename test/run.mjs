@@ -599,6 +599,8 @@ await step('emailed PDF bill lands in the sender\'s HSA with the file attached',
   // Opening it reads the PDF.
   const det = await req('GET', `/e/${e.id}`);
   assert.match(det.text, /\/e\/\d+\/edit\?read=1/);
+  assert.match(det.text, /class="doc"[^>]*data-pdf="\/files\/\d+"/, 'PDF tile gets a page-1 preview');
+  assert.match(det.text, /\/static\/thumbs\.js/);
 });
 
 await step('emailed photo and an e-receipt in the email body', async () => {

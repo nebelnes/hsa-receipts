@@ -52,6 +52,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:now
 .thumb{border:1px solid var(--line);border-radius:10px;padding:6px;background:var(--bg)}
 .thumb img{width:100%;height:180px;object-fit:contain;display:block;border-radius:6px;background:#fff}
 .thumb .doc{height:180px;display:flex;align-items:center;justify-content:center;font-size:2.5rem}
+.thumb .doc canvas{max-width:100%;max-height:180px;background:#fff;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.15)}
 .filters{display:flex;gap:8px;flex-wrap:wrap;align-items:end}
 .filters label{margin:0 0 2px}.filters>div{min-width:120px;flex:1}
 .status{font-size:.9rem;margin:6px 0}

@@ -284,7 +284,7 @@ function fileTiles(files, { manage = false, expenseId } = {}) {
     .map((f) => {
       const preview = f.type.startsWith('image/') && !/hei[cf]/.test(f.type)
         ? `<a href="/files/${f.id}" target="_blank" rel="noopener"><img src="/files/${f.id}" alt="${esc(f.name)}" loading="lazy"></a>`
-        : `<a class="doc" href="/files/${f.id}" target="_blank" rel="noopener">${f.type === 'application/pdf' ? '📄' : '🖼️'}</a>`;
+        : `<a class="doc" href="/files/${f.id}" target="_blank" rel="noopener"${f.type === 'application/pdf' ? ` data-pdf="/files/${f.id}"` : ''}>${f.type === 'application/pdf' ? '📄' : '🖼️'}</a>`;
       const kinds = Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${f.kind === k ? 'selected' : ''}>${esc(v)}</option>`).join('');
       return `<div class="thumb">${preview}
         <div class="small"><a href="/files/${f.id}?download=1">${esc(f.name)}</a></div>
@@ -397,7 +397,7 @@ export async function detailPage(env, user, url, id) {
       <label class="small" style="font-weight:500"><input type="checkbox" name="confirm" value="1" required>Yes, delete this receipt and its files</label>
       <button class="danger small" type="submit">Delete receipt</button>
     </form>`;
-  return page({ title: e.provider || 'Receipt', user, body, flash: flashFrom(url), scripts: ['/static/receipt-pdf.js'] });
+  return page({ title: e.provider || 'Receipt', user, body, flash: flashFrom(url), scripts: ['/static/receipt-pdf.js', ...(files.some((f) => f.type === 'application/pdf') ? ['/static/thumbs.js'] : [])] });
 }
 
 export async function editPage(env, user, url, id) {
