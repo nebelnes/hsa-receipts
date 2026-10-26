@@ -44,16 +44,19 @@ export async function receiveEmail(message, env) {
   const body = mail.text.slice(0, 8000);
   if (!files.length && body.replace(/\s/g, '').length < 20) return { reject: 'No receipt found. Attach a PDF or photo, or forward the e-receipt.' };
 
-  // An e-receipt in the email body can be read right away; attachments are read when opened.
-  const guess = files.length ? { category: null } : parseReceipt(`${mail.subject}\n${body}`, { today: today() });
+  // Read the subject and body right away: an e-receipt or payment
+  // confirmation has the details there. Attached PDFs and photos are read
+  // when opened (or with "Read all"), filling in whatever is still empty.
+  const guess = parseReceipt(`${mail.subject}\n${body}`, { today: today() });
+  const paidNote = /\b(paid|payment|receipt for payment)\b/i.test(`${mail.subject}\n${body}`);
   const fields = {
-    service_date: files.length ? null : guess.date,
-    provider: files.length ? null : guess.provider,
-    amount: files.length ? null : guess.amount,
-    category: files.length ? null : guess.category,
-    paid_date: files.length ? null : guess.date,
+    service_date: guess.date,
+    provider: guess.provider,
+    amount: guess.amount,
+    category: guess.category,
+    paid_date: files.length && !paidNote ? null : guess.date,
     notes: `Emailed: ${mail.subject || '(no subject)'}`.slice(0, 300),
-    ocr_text: body || null,
+    ocr_text: `${mail.subject || ''}\n${body}`.trim().slice(0, 8000) || null,
     // Fingerprint of an e-receipt in the body, to spot the same email sent twice.
     source_hash: files.length ? null : await sha256Hex(`${mail.subject}\n${body}`.toLowerCase().replace(/^(fwd?|re):\s*/gm, '').replace(/^>+/gm, '').replace(/\s+/g, ' ').trim()),
   };

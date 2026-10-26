@@ -156,6 +156,10 @@ async function handle(request, env) {
     const r = await ex.deleteExpense(env, id, await readForm(request));
     return redirect(r.error ? withMsg(`/e/${id}`, r.error, 'bad') : withMsg('/', 'Receipt deleted.'));
   }
+  if ((p = m(/^\/e\/(\d+)\/autofill$/)) && method === 'POST') {
+    const r = await ex.autofillExpense(env, Number(p[1]), (await readForm(request)).text);
+    return new Response(JSON.stringify(r), { status: r.error ? 404 : 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+  }
   if ((p = m(/^\/e\/(\d+)\/notdup$/)) && method === 'POST') {
     const id = Number(p[1]);
     const form = await readForm(request);

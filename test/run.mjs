@@ -669,8 +669,8 @@ await step('same photo uploaded twice is flagged; "Not a duplicate" clears it; d
   const home = await req('GET', '/');
   assert.match(home.text, /look like possible duplicates/);
   const dupList = await req('GET', '/?status=dups');
-  assert.match(dupList.text, new RegExp(`href="/e/${a}"`));
-  assert.match(dupList.text, new RegExp(`href="/e/${b}"`));
+  assert.match(dupList.text, new RegExp(`href="/e/${a}[/"]`));
+  assert.match(dupList.text, new RegExp(`href="/e/${b}[/"]`));
   assert.match(dupList.text, /Duplicate\?/);
 
   const ok = await req('POST', `/e/${b}/notdup`, { other: String(a) });
@@ -710,6 +710,58 @@ await step('the same e-receipt emailed twice is flagged', async () => {
   const two = (await send('Fwd: Your Walgreens receipt')).created[0];
   assert.ok(one1.source_hash && one1.source_hash === two.source_hash);
   assert.match((await req('GET', `/e/${two.id}`)).text, /same emailed receipt/);
+});
+
+console.log('Filling in emailed receipts');
+
+await step('payment confirmation with an attachment: details come from the email text', async () => {
+  const body = 'Thank you for your payment to Labcorp.\r\nInvoice number: 87661140\r\nPayment date: 02/05/2025\r\nPayment amount: $23.20\r\n';
+  const r = await sendEmail(rawEmail({
+    subject: 'Fwd: Your Labcorp Payment Confirmation',
+    parts: [`Content-Type: text/plain\r\n\r\n${body}`, `Content-Type: image/png\r\nContent-Disposition: attachment; filename="receipt.png"\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(new Uint8Array(20000).fill(7))}`],
+  }));
+  const e = r.created[0];
+  assert.equal(e.service_date, '2025-02-05');
+  assert.equal(e.amount, 23.2);
+  assert.equal(e.provider, 'Labcorp');
+  assert.equal(e.paid_date, '2025-02-05');
+  assert.equal(e.category, 'Lab / imaging');
+});
+
+await step('statement email: provider from the email, rest left for the PDF; "Read all" fills it in', async () => {
+  const body = '| Your Billing Statement is Ready |\r\n| Hi Alexey, |\r\n| Your latest billing statement from Stonewalk Family Dentistry is attached to this email. |\r\n| Stonewalk Family Dentistry |\r\n| 5304 Windward Pkwy |\r\n';
+  const r = await sendEmail(rawEmail({
+    subject: 'Electronic Statement',
+    parts: [`Content-Type: text/plain\r\n\r\n${body}`, `Content-Type: application/pdf\r\nContent-Disposition: attachment; filename="ElectronicStatement.pdf"\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64(new TextEncoder().encode('%PDF-1.4\n% stonewalk\n%%EOF'))}`],
+  }));
+  const e = r.created[0];
+  assert.equal(e.provider, 'Stonewalk Family Dentistry');
+  assert.equal(e.amount, null);
+  assert.equal(e.paid_date, null, 'a bill is not a payment');
+  assert.equal(e.status, 'draft');
+
+  const drafts = await req('GET', '/?status=draft');
+  assert.match(drafts.text, new RegExp(`data-read="${e.id}" data-file="/files/\\d+" data-type="application/pdf"`));
+  assert.match(drafts.text, /id="read-all"/);
+  assert.match(drafts.text, /\/static\/read-all\.js/);
+
+  // What the browser would send after reading the PDF.
+  const pdfText = 'Stonewalk Family Dentistry\nStatement Date 10/01/2026\nPatient: Alexey\nDate of Service 09/12/2026 Periodic exam\nPatient Balance Due $85.00\n';
+  const res = await req('POST', `/e/${e.id}/autofill`, { text: pdfText });
+  const out = JSON.parse(res.text);
+  assert.equal(out.complete, true);
+  assert.deepEqual(out.filled.sort(), ['amount', 'date']);
+  const after = q('SELECT * FROM expenses WHERE id = ?', e.id)[0];
+  assert.equal(after.provider, 'Stonewalk Family Dentistry', 'kept');
+  assert.equal(after.amount, 85);
+  assert.equal(after.status, 'open');
+  assert.match(after.ocr_text, /Periodic exam[\s\S]*---[\s\S]*Billing Statement/);
+
+  // Never overwrites, and leaves finished receipts alone.
+  const again = JSON.parse((await req('POST', `/e/${e.id}/autofill`, { text: 'Total $1.00' })).text);
+  assert.deepEqual(again.filled, []);
+  assert.equal(q('SELECT amount FROM expenses WHERE id = ?', e.id)[0].amount, 85);
+  assert.equal((await req('POST', '/e/999999/autofill', { text: 'x' })).status, 404);
 });
 
 // Optional: save rendered pages for a visual check (SNAPSHOT_DIR=/some/dir npm test).

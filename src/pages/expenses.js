@@ -7,6 +7,7 @@ import { page, errorPage, flashFrom } from '../views/layout.js';
 import { saveFiles, filesFor, countUploads, KINDS, deleteExpenseFiles } from '../files.js';
 import { getAccounts, accountForUser, accountName, validAccount } from '../accounts.js';
 import { duplicateMap, duplicatesOf, forgetPairs } from '../dups.js';
+import { parseReceipt } from '../../public/static/parse.js';
 
 export const CATEGORIES = [
   'Doctor visit',
@@ -107,6 +108,16 @@ export async function listPage(env, user, url) {
     ...args,
   );
 
+  // Drafts: which file "Read all" should read for each one.
+  const readable = new Map();
+  if (status === 'draft' && rows.length) {
+    const fl = await all(env, `SELECT id, expense_id, type, kind FROM files WHERE expense_id IN (${rows.map((r) => Number(r.id)).join(',')}) ORDER BY (kind = 'receipt') DESC, id`);
+    for (const f of fl) {
+      const ok = f.type === 'application/pdf' || (f.type.startsWith('image/') && !/hei[cf]/.test(f.type));
+      if (ok && !readable.has(f.expense_id)) readable.set(f.expense_id, f);
+    }
+  }
+
   const thisYear = today().slice(0, 4);
   const open = await one(env, `SELECT COUNT(*) n, COALESCE(SUM(amount), 0) s FROM expenses WHERE status = 'open'`);
   const openBy = new Map((await all(env, `SELECT account, COUNT(*) n, COALESCE(SUM(amount), 0) s FROM expenses WHERE status = 'open' GROUP BY account`)).map((r) => [String(r.account), r]));
@@ -131,10 +142,10 @@ export async function listPage(env, user, url) {
         <thead><tr>${bulk ? '<th><input type="checkbox" id="all" aria-label="Select all"></th>' : ''}<th>Date</th><th>Provider</th><th>${multi && !acct ? 'HSA' : 'Person'}</th><th class="hide-sm">${multi && !acct ? 'Person' : 'Category'}</th><th class="num">Amount</th>${status === 'open' ? '' : '<th>Status</th>'}<th class="hide-sm">Files</th></tr></thead>
         <tbody>${rows
           .map(
-            (r) => `<tr>
+            (r) => `<tr${readable.has(r.id) ? ` data-read="${r.id}" data-file="/files/${readable.get(r.id).id}" data-type="${esc(readable.get(r.id).type)}"` : ''}>
           ${bulk ? `<td><input type="checkbox" name="ids" value="${r.id}" form="bulk" data-amount="${Number(r.amount) || 0}" aria-label="Select"></td>` : ''}
           <td class="nowrap">${esc(shortDate(r.service_date) || '—')}</td>
-          <td><a href="/e/${r.id}">${esc(r.provider || 'Untitled receipt')}</a>${dups.has(r.id) ? ' <span class="chip bad">Duplicate?</span>' : ''}</td>
+          <td><a href="/e/${r.id}${r.status === 'draft' ? '/edit?read=1' : ''}">${esc(r.provider || 'Untitled receipt')}</a>${dups.has(r.id) ? ' <span class="chip bad">Duplicate?</span>' : ''}</td>
           ${multi && !acct
             ? `<td>${esc(accountName(accounts, r.account))}</td><td class="hide-sm">${esc(r.patient || '')}</td>`
             : `<td>${esc(r.patient || '')}</td><td class="hide-sm">${esc(r.category || '')}</td>`}
@@ -191,8 +202,13 @@ export async function listPage(env, user, url) {
     <a class="btn big" href="/new">＋ Add receipt</a>
     ${drafts.n && status !== 'draft' ? `<div class="banner warn">${drafts.n} receipt${drafts.n === 1 ? ' is' : 's are'} missing the date, provider or amount. <a href="/?status=draft">Finish ${drafts.n === 1 ? 'it' : 'them'}</a>.</div>` : ''}
     ${dups.size && status !== 'dups' ? `<div class="banner bad">${dups.size} receipts look like possible duplicates. <a href="/?status=dups">Review them</a> so nothing is reimbursed twice.</div>` : ''}
+    ${readable.size ? `<div class="card" id="read-all-card"><strong>Fill these in automatically?</strong>
+        <p class="hint">Reads the PDF or photo on each of these ${plural(readable.size, 'receipt')} (and the email it came with) on this device, and fills in the date, provider and amount where it finds them. Nothing you typed is changed. Check the results afterwards.</p>
+        <button type="button" id="read-all">📖 Read all ${readable.size}</button>
+        <p id="read-all-status" class="status muted" role="status"></p></div>` : ''}
     ${filters}${table}${bulkForm}${moveForm}`;
-  return page({ title: 'Receipts', active: 'list', user, body, flash: flashFrom(url), scripts: bulk ? ['/static/list.js'] : [] });
+  const scripts = [...(bulk ? ['/static/list.js'] : []), ...(readable.size ? ['/static/read-all.js'] : [])];
+  return page({ title: 'Receipts', active: 'list', user, body, flash: flashFrom(url), scripts });
 }
 
 // ---------- Add ----------
@@ -489,6 +505,40 @@ export async function saveExpense(env, form, id) {
     rec.paid_with, rec.notes, rec.ocr_text, reimbursedDate, reimbursedAmount, rec.account, id,
   );
   return { id, status, complete };
+}
+
+// "Read all": fills the empty fields of a draft from its file's text (read in
+// the browser) and the email it came with. Never overwrites what's there.
+export async function autofillExpense(env, id, text) {
+  const e = await getExpense(env, id);
+  if (!e) return { error: 'Receipt not found.' };
+  if (e.status !== 'draft') return { id, status: e.status, filled: [] };
+  const day = today();
+  const fileText = String(text || '').slice(0, 8000);
+  const g = parseReceipt(fileText, { today: day });
+  const m = parseReceipt(e.ocr_text || '', { today: day });
+  const pick = (cur, a, b) => (cur !== null && cur !== undefined && cur !== '' ? cur : a ?? b ?? null);
+  const filled = [];
+  const val = (k, cur, a, b, label) => {
+    const v = pick(cur, a, b);
+    if ((cur === null || cur === undefined || cur === '') && v !== null) filled.push(label);
+    return v;
+  };
+  const form = {
+    account: e.account,
+    service_date: val('service_date', e.service_date, g.date, m.date, 'date'),
+    provider: val('provider', e.provider, g.provider, m.provider, 'provider'),
+    amount: (() => { const v = val('amount', e.amount, g.amount, m.amount, 'amount'); return v === null ? '' : String(v); })(),
+    category: val('category', e.category, g.category, m.category, 'category'),
+    patient: e.patient || '',
+    paid_date: e.paid_date || '',
+    paid_with: e.paid_with || '',
+    notes: e.notes || '',
+    ocr_text: [fileText, e.ocr_text].filter(Boolean).join('\n---\n').slice(0, 8000),
+  };
+  for (const k of Object.keys(form)) if (form[k] === null) form[k] = '';
+  const r = await saveExpense(env, form, id);
+  return { id, status: r.status, filled, complete: !!r.complete };
 }
 
 export async function addFiles(env, id, form) {

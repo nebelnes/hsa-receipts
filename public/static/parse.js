@@ -102,6 +102,8 @@ const NOT_PROVIDER = /receipt|invoice|statement|page \d|\bdate\b|patient|account
 
 function tidyName(s) {
   let t = s.replace(/[|_~*=<>«»•]+/g, ' ').replace(/\s{2,}/g, ' ').replace(/^[\W\d]+|[\W]+$/g, '').trim();
+  // Email subjects like "Your Labcorp Payment Confirmation" -> "Labcorp".
+  t = t.replace(/^((fwd?|re):\s*)+/i, '').replace(/^your\s+/i, '').replace(/\s+(payment\s+)?confirmation$/i, '').trim();
   const letters = t.replace(/[^A-Za-z]/g, '');
   if (letters.length > 3 && letters === letters.toUpperCase()) {
     t = t.toLowerCase().replace(/\b([a-z])/g, (c) => c.toUpperCase()).replace(/\b(Md|Dds|Od|Pa|Llc|Pc|Cvs|Er|Ent|Choa)\b/g, (w) => w.toUpperCase());
