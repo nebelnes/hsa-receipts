@@ -47,7 +47,7 @@ function datesIn(line, today) {
 // Money needs cents ("45.10", "$1,234.00") so account numbers and ZIP codes aren't mistaken for amounts.
 function moneyIn(line) {
   const out = [];
-  const re = /(?<![\d.,])\$?\s?(\d{1,3}(?:,\d{3})+|\d+)[.,](\d{2})(?![\d])/g;
+  const re = /(?<![\d,])(?<!\d\.)\$?\s?(\d{1,3}(?:,\d{3})+|\d+)[.,](\d{2})(?![\d])/g;
   let m;
   while ((m = re.exec(line))) {
     const v = Number(`${m[1].replace(/,/g, '')}.${m[2]}`);

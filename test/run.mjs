@@ -714,6 +714,21 @@ await step('the same e-receipt emailed twice is flagged', async () => {
 
 console.log('Filling in emailed receipts');
 
+await step('card terminal slips: "Total Amt......70.60" with dot leaders', async () => {
+  const slip = (amt) => `Stonewalk Family Dentistry\n5304 Windward Pkwy Suite 107\nAlpharetta, GA 300043828\n(770)777- 1911\nDate...........03/18/2024 8:08:24 AM\nTrans Type.....SALE\nTransaction #..28649074\nAccount........************6358\nResult.........Approved\nTotal Amt......${amt}\nI agree to pay the above total amount`;
+  for (const [amt, want] of [['70.60', 70.6], ['$100.00', 100], ['934.20', 934.2], ['1,250.00', 1250]]) {
+    const g = parseReceipt(slip(amt), { today: TODAY });
+    assert.equal(g.amount, want, amt);
+    assert.equal(g.date, '2024-03-18');
+    assert.equal(g.provider, 'Stonewalk Family Dentistry');
+  }
+  assert.equal(parseReceipt('Version 1.2.50 Total $5.00', { today: TODAY }).amount, 5);
+  const { cardSlip } = await import('../src/pages/expenses.js');
+  assert.deepEqual(cardSlip(slip('70.60').replace('Result', 'Card Type......VISA\nResult')), { paid: true, card: 'Visa ending 6358' });
+  assert.deepEqual(cardSlip('Account........************1002\nCard Type......Amex\nTrans Type.....SALE'), { paid: true, card: 'Amex ending 1002' });
+  assert.deepEqual(cardSlip('Patient Balance Due $85.00'), { paid: false, card: null });
+});
+
 await step('payment confirmation with an attachment: details come from the email text', async () => {
   const body = 'Thank you for your payment to Labcorp.\r\nInvoice number: 87661140\r\nPayment date: 02/05/2025\r\nPayment amount: $23.20\r\n';
   const r = await sendEmail(rawEmail({
@@ -759,9 +774,11 @@ await step('statement email: provider from the email, rest left for the PDF; "Re
 
   // Never overwrites, and leaves finished receipts alone.
   const again = JSON.parse((await req('POST', `/e/${e.id}/autofill`, { text: 'Total $1.00' })).text);
-  assert.deepEqual(again.filled, []);
+  assert.ok(!again.filled.includes('amount'));
   assert.equal(q('SELECT amount FROM expenses WHERE id = ?', e.id)[0].amount, 85);
   assert.equal((await req('POST', '/e/999999/autofill', { text: 'x' })).status, 404);
+  await req('POST', `/e/${e.id}/reimburse`, { reimbursed_date: '2026-10-20', reimbursed_amount: '85.00' });
+  assert.deepEqual(JSON.parse((await req('POST', `/e/${e.id}/autofill`, { text: 'Card Type......Visa\nAccount....****1234\nApproved' })).text).filled, [], 'reimbursed ones are left alone');
 });
 
 // Optional: save rendered pages for a visual check (SNAPSHOT_DIR=/some/dir npm test).

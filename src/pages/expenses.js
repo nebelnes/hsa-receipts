@@ -507,21 +507,33 @@ export async function saveExpense(env, form, id) {
   return { id, status, complete };
 }
 
+// A card terminal slip or payment receipt: "Trans Type.....SALE",
+// "Card Type......Visa", "Account........************6418".
+export function cardSlip(text) {
+  const t = String(text || '');
+  const paid = /\b(trans(?:action)? type\W+sale|approved|processed|payment received|amount paid|total paid|thank you for your payment)\b/i.test(t);
+  const brand = (t.match(/card\s*type\W*([A-Za-z]+)/i) || [])[1];
+  const last4 = (t.match(/(?:account|card)(?:\s*(?:#|no\.?|number))?\W*[*xX•]{4,}\s*(\d{4})\b/i) || [])[1];
+  const name = brand ? brand[0].toUpperCase() + brand.slice(1).toLowerCase() : 'Card';
+  return { paid, card: last4 ? `${name === 'Amex' || name === 'American' ? 'Amex' : name} ending ${last4}` : null };
+}
+
 // "Read all": fills the empty fields of a draft from its file's text (read in
 // the browser) and the email it came with. Never overwrites what's there.
 export async function autofillExpense(env, id, text) {
   const e = await getExpense(env, id);
   if (!e) return { error: 'Receipt not found.' };
-  if (e.status !== 'draft') return { id, status: e.status, filled: [] };
+  if (!['draft', 'open'].includes(e.status)) return { id, status: e.status, filled: [] };
   const day = today();
   const fileText = String(text || '').slice(0, 8000);
   const g = parseReceipt(fileText, { today: day });
   const m = parseReceipt(e.ocr_text || '', { today: day });
   const pick = (cur, a, b) => (cur !== null && cur !== undefined && cur !== '' ? cur : a ?? b ?? null);
+  const slip = cardSlip(`${fileText}\n${e.ocr_text || ''}`);
   const filled = [];
   const val = (k, cur, a, b, label) => {
     const v = pick(cur, a, b);
-    if ((cur === null || cur === undefined || cur === '') && v !== null) filled.push(label);
+    if ((cur === null || cur === undefined || cur === '') && v !== null && v !== undefined) filled.push(label);
     return v;
   };
   const form = {
@@ -531,8 +543,8 @@ export async function autofillExpense(env, id, text) {
     amount: (() => { const v = val('amount', e.amount, g.amount, m.amount, 'amount'); return v === null ? '' : String(v); })(),
     category: val('category', e.category, g.category, m.category, 'category'),
     patient: e.patient || '',
-    paid_date: e.paid_date || '',
-    paid_with: e.paid_with || '',
+    paid_date: e.paid_date || (slip.paid ? pick(null, g.date, m.date) || '' : ''),
+    paid_with: e.paid_with || slip.card || '',
     notes: e.notes || '',
     ocr_text: [fileText, e.ocr_text].filter(Boolean).join('\n---\n').slice(0, 8000),
   };
