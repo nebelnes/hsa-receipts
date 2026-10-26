@@ -10,6 +10,7 @@ import * as settings from './pages/settings.js';
 import { ICON_180, ICON_192, ICON_512 } from './icons.js';
 import { receiveEmail } from './email.js';
 import { markNotDuplicate } from './dups.js';
+import * as onedrive from './onedrive.js';
 
 const AUTH_MESSAGES = {
   'not-configured': 'The private sign-in isn\'t set up yet, so the site is locked. Finish the Cloudflare Access step in SETUP.md.',
@@ -203,6 +204,26 @@ async function handle(request, env) {
   if (path === '/export/files.json' && method === 'GET') {
     return new Response(JSON.stringify(await ex.exportManifest(env)), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
   }
+  // ----- OneDrive backup -----
+  if (path === '/onedrive/connect' && method === 'GET') {
+    if (!onedrive.configured(env)) return redirect(withMsg('/settings#backup', 'OneDrive backup is not set up yet (see SETUP.md).', 'bad'));
+    return redirect(await onedrive.connectUrl(env));
+  }
+  if (path === '/onedrive/callback' && method === 'GET') {
+    const r = await onedrive.finishConnect(env, url);
+    if (r.error) return redirect(withMsg('/settings#backup', `OneDrive: ${r.error}`, 'bad'));
+    const b = await onedrive.runBackup(env);
+    return redirect(withMsg('/settings#backup', b.error ? `Connected, but the first backup failed: ${b.error}` : `OneDrive connected. Backed up ${b.copied} file${b.copied === 1 ? '' : 's'}${b.left ? `; ${b.left} more go tonight` : ''}.`, b.error ? 'warn' : 'ok'));
+  }
+  if (path === '/onedrive/backup' && method === 'POST') {
+    const b = await onedrive.runBackup(env);
+    return redirect(withMsg('/settings#backup', b.error ? `Backup failed: ${b.error}` : `Backed up ${b.copied} new file${b.copied === 1 ? '' : 's'} and the receipt list.${b.left ? ` ${b.left} still waiting; press again or they go tonight.` : ''}`, b.error ? 'bad' : 'ok'));
+  }
+  if (path === '/onedrive/disconnect' && method === 'POST') {
+    await onedrive.disconnect(env);
+    return redirect(withMsg('/settings#backup', 'OneDrive disconnected. Files already backed up stay there.'));
+  }
+
   if (path === '/settings') {
     if (method === 'GET') return out(await settings.settingsPage(env, user, url), user);
     const r = await settings.saveSettings(env, await readForm(request));
@@ -223,6 +244,15 @@ export default {
         500,
       );
     }
+  },
+
+  // Nightly OneDrive backup (cron in wrangler.jsonc).
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil((async () => {
+      await ensureSchema(env.DB);
+      const r = await onedrive.scheduledBackup(env);
+      if (r) console.log('onedrive backup', JSON.stringify(r));
+    })());
   },
 
   // Cloudflare Email Routing hands emails sent to the receipts address here.

@@ -6,6 +6,7 @@ import { page, flashFrom } from '../views/layout.js';
 import { DEFAULT_PAID_WITH, getPersonHsa } from './expenses.js';
 import { authConfigured, allowedEmails } from '../auth.js';
 import { getAccounts, saveAccounts, MAX_ACCOUNTS } from '../accounts.js';
+import * as onedrive from '../onedrive.js';
 
 export async function settingsPage(env, user, url) {
   const peopleList = splitList(await getSetting(env, 'people', ''));
@@ -34,6 +35,27 @@ export async function settingsPage(env, user, url) {
     </div>`)
     .join('');
 
+  const od = await onedrive.getStatus(env);
+  const odOn = await onedrive.isConnected(env);
+  const when = (iso) => (iso ? new Date(iso).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' }) : '');
+  const backupCard = `<div class="card" id="backup">
+      <h2 style="margin-top:0">☁️ OneDrive backup</h2>
+      ${!onedrive.configured(env)
+        ? '<p class="hint">Not set up yet. Follow "OneDrive backup" in SETUP.md (a free, one-time Microsoft app registration).</p>'
+        : odOn
+          ? `<p>✅ Connected. Every night the site copies new receipt files and the receipt list (receipts.csv) to <strong>OneDrive › Apps › HSA Receipts</strong>${od.folder ? ` (<a href="${esc(od.folder)}" target="_blank" rel="noopener">open</a>)` : ''}. It can only see that folder.</p>
+             <ul class="small">
+               <li>Last backup: ${od.lastOk ? esc(when(od.lastOk)) : 'not yet'}${od.lastRun && od.lastCopied !== undefined ? ` (${od.lastCopied} new file${od.lastCopied === 1 ? '' : 's'} on the last run)` : ''}</li>
+               <li>Backed up: ${od.total !== undefined ? `${od.total - (od.waiting || 0)} of ${od.total} files` : '—'}${od.waiting ? `, ${od.waiting} waiting` : ''}</li>
+               ${od.lastError ? `<li class="chip bad">Last run failed: ${esc(od.lastError)}</li>` : ''}
+             </ul>
+             <form class="inline" method="post" action="/onedrive/backup"><button type="submit">Back up now</button></form>
+             <form class="inline" method="post" action="/onedrive/disconnect" onsubmit="return confirm('Stop backing up to OneDrive? Files already there stay.')"><button class="ghost small" type="submit">Disconnect</button></form>`
+          : `<p class="hint">Copies every receipt file and the receipt list to your OneDrive each night, into its own folder (Apps › HSA Receipts). The site can't see anything else in your OneDrive.</p>
+             ${od.lastError ? `<p class="chip bad">${esc(od.lastError)}</p>` : ''}
+             <a class="btn" href="/onedrive/connect">Connect OneDrive</a>`}
+    </div>`;
+
   const body = `<h1>Settings</h1>
     <form class="card" method="post" action="/settings">
       <h2 style="margin-top:0">HSA accounts</h2>
@@ -56,6 +78,7 @@ export async function settingsPage(env, user, url) {
       <p class="hint">Separate with commas. Anything containing "HSA" counts as paid by the HSA (nothing to reimburse).</p>
       <button type="submit">Save settings</button>
     </form>
+    ${backupCard}
     <div class="card small">
       <strong>Status</strong>
       <ul>

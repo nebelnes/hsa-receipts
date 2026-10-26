@@ -783,6 +783,107 @@ await step('statement email: provider from the email, rest left for the PDF; "Re
   assert.deepEqual(JSON.parse((await req('POST', `/e/${e.id}/autofill`, { text: 'Card Type......Visa\nAccount....****1234\nApproved' })).text).filled, [], 'reimbursed ones are left alone');
 });
 
+console.log('OneDrive backup');
+
+await step('connect OneDrive, back up files and the list, nightly run, expired sign-in', async () => {
+  const CLIENT = '11111111-2222-3333-4444-555555555555';
+  const odEnv = { ...env, ONEDRIVE_CLIENT_ID: CLIENT };
+  const uploads = new Map();
+  const calls = [];
+  let refreshOk = true;
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.startsWith('https://login.microsoftonline.com/consumers/oauth2/v2.0/token')) {
+      const p = new URLSearchParams(init.body);
+      calls.push(p.get('grant_type'));
+      assert.equal(p.get('client_id'), CLIENT);
+      assert.match(p.get('scope'), /Files\.ReadWrite\.AppFolder/);
+      assert.ok(!p.has('client_secret'));
+      if (p.get('grant_type') === 'authorization_code') {
+        assert.equal(p.get('code'), 'CODE1');
+        assert.equal(p.get('redirect_uri'), `${ORIGIN}/onedrive/callback`);
+        assert.ok(p.get('code_verifier').length >= 43);
+        return Response.json({ access_token: 'AT1', refresh_token: 'RT1' });
+      }
+      if (!refreshOk) return Response.json({ error: 'invalid_grant', error_description: 'AADSTS70000: expired' }, { status: 400 });
+      return Response.json({ access_token: 'AT2', refresh_token: 'RT2' });
+    }
+    if (url === 'https://graph.microsoft.com/v1.0/me/drive/special/approot') {
+      return Response.json({ webUrl: 'https://onedrive.live.com/?id=apps-hsa', name: 'HSA Receipts' });
+    }
+    const m = url.match(/^https:\/\/graph\.microsoft\.com\/v1\.0\/me\/drive\/special\/approot:\/(.+):\/content\?@microsoft\.graph\.conflictBehavior=replace$/);
+    if (m) {
+      assert.equal(init.method, 'PUT');
+      assert.match(init.headers.Authorization, /^Bearer AT/);
+      uploads.set(decodeURIComponent(m[1]), new Uint8Array(typeof init.body === 'string' ? new TextEncoder().encode(init.body) : init.body));
+      return Response.json({ id: 'x' }, { status: 201 });
+    }
+    return prevFetch(input, init);
+  };
+  try {
+    // Not set up: friendly message, no link to Microsoft.
+    assert.match((await req('GET', '/settings')).text, /Not set up yet/);
+    assert.match(msgOf((await req('GET', '/onedrive/connect')).location), /not set up/);
+
+    assert.match((await req('GET', '/settings', null, {}, odEnv)).text, /Connect OneDrive/);
+    const go = await req('GET', '/onedrive/connect', null, {}, odEnv);
+    const auth = new URL(go.location);
+    assert.equal(auth.origin + auth.pathname, 'https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize');
+    assert.equal(auth.searchParams.get('code_challenge_method'), 'S256');
+    assert.equal(auth.searchParams.get('scope'), 'Files.ReadWrite.AppFolder offline_access');
+    const state = auth.searchParams.get('state');
+
+    // Wrong state is refused.
+    assert.match(msgOf((await req('GET', `/onedrive/callback?code=CODE1&state=nope`, null, {}, odEnv)).location), /expired/);
+    // A fresh connect, then Microsoft sends us back.
+    const go2 = new URL((await req('GET', '/onedrive/connect', null, {}, odEnv)).location);
+    const back = await req('GET', `/onedrive/callback?code=CODE1&state=${go2.searchParams.get('state')}`, null, {}, odEnv);
+    assert.notEqual(go2.searchParams.get('state'), state);
+    const total = q('SELECT COUNT(*) n FROM files')[0].n;
+    const first = Math.min(total, 40);
+    assert.match(msgOf(back.location), new RegExp(`OneDrive connected\\. Backed up ${first} files`));
+    assert.equal(q('SELECT value FROM settings WHERE key = ?', 'onedrive_refresh')[0].value, 'RT2', 'refresh token rotates');
+    assert.ok(uploads.has('receipts.csv'));
+    assert.match(new TextDecoder().decode(uploads.get('receipts.csv')), /^id,hsa,status/);
+    const one1 = q('SELECT * FROM files WHERE backup_at IS NOT NULL ORDER BY id LIMIT 1')[0];
+    assert.deepEqual([...uploads.get(one1.backup_path)], [...env.FILES.objects.get(one1.r2_key).bytes], 'file copied byte for byte');
+    assert.match(one1.backup_path, /^[^/]+ HSA\/\d{4}|^\d{4}\//);
+
+    // Back up now: the rest; then nothing new.
+    const now1 = await req('POST', '/onedrive/backup', {}, {}, odEnv);
+    assert.match(msgOf(now1.location), /Backed up \d+ new file/);
+    while (q('SELECT COUNT(*) n FROM files WHERE backup_at IS NULL')[0].n) await req('POST', '/onedrive/backup', {}, {}, odEnv);
+    const before = uploads.size;
+    const now2 = await req('POST', '/onedrive/backup', {}, {}, odEnv);
+    assert.match(msgOf(now2.location), /Backed up 0 new files/);
+    assert.equal(uploads.size, before, 'nothing copied twice');
+
+    // A new receipt goes out on the nightly run.
+    await req('POST', '/new', upload(new File([new TextEncoder().encode('\xff\xd8 nightly \xff\xd9')], 'night.jpg', { type: 'image/jpeg' })));
+    let waited;
+    await worker.scheduled({ cron: '15 7 * * *' }, odEnv, { waitUntil: (p) => { waited = p; } });
+    await waited;
+    assert.equal(q('SELECT COUNT(*) n FROM files WHERE backup_at IS NULL')[0].n, 0);
+    const page = (await req('GET', '/settings', null, {}, odEnv)).text;
+    assert.match(page, /✅ Connected/);
+    assert.match(page, new RegExp(`Backed up: ${total + 1} of ${total + 1} files`));
+
+    // Microsoft sign-in expires: clear message, asks to reconnect.
+    refreshOk = false;
+    const bad = await req('POST', '/onedrive/backup', {}, {}, odEnv);
+    assert.match(msgOf(bad.location), /sign-in expired.*Connect OneDrive/);
+    assert.match((await req('GET', '/settings', null, {}, odEnv)).text, /Connect OneDrive/);
+
+    // Disconnect.
+    refreshOk = true;
+    await req('POST', '/onedrive/disconnect', {}, {}, odEnv);
+    assert.equal(q('SELECT value FROM settings WHERE key = ?', 'onedrive_refresh')[0].value, '');
+  } finally {
+    globalThis.fetch = prevFetch;
+  }
+});
+
 // Optional: save rendered pages for a visual check (SNAPSHOT_DIR=/some/dir npm test).
 if (process.env.SNAPSHOT_DIR) {
   const fs = await import('node:fs');

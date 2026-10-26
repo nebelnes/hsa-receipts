@@ -75,3 +75,24 @@ tell Claude, who adds it to `ALLOWED_EMAILS` in `wrangler.jsonc`.
   pdf.js) loads from jsDelivr, a free public CDN; the receipt itself isn't sent
   anywhere for reading.
 - Domain: already paid for (muravskiy.org).
+
+## OneDrive backup (optional)
+
+The site can copy every receipt file and the receipt list to OneDrive each
+night, into its own folder (OneDrive › Apps › HSA Receipts). It needs a
+Microsoft "app registration" (free), which Microsoft now only allows inside
+a directory (Entra ID tenant).
+
+1. In the Azure portal → App registrations → New registration:
+   - Name: `HSA Receipts`
+   - Supported account types: **Personal Microsoft accounts only**
+   - Redirect URI: platform **Public client/native (mobile & desktop)**,
+     `https://hsa.muravskiy.org/onedrive/callback`
+2. Authentication → Advanced settings → **Allow public client flows: Yes** → Save.
+3. API permissions → Add → Microsoft Graph → Delegated →
+   `Files.ReadWrite.AppFolder` and `offline_access`.
+4. Copy the **Application (client) ID** into `ONEDRIVE_CLIENT_ID` in
+   `wrangler.jsonc`, push, then Settings → **Connect OneDrive**.
+
+No client secret is used, so nothing expires. If Microsoft sign-in lapses
+(password change, 90 days unused), Settings shows "Connect OneDrive" again.

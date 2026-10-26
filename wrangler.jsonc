@@ -29,8 +29,14 @@
     "ALLOWED_EMAILS": "nebelnes@gmail.com, n.savchenko@hotmail.com",
     "SITE_URL": "https://hsa.muravskiy.org",
     // Emails sent here become receipts (Email Routing rule → this Worker; see SETUP.md).
-    "RECEIPTS_EMAIL": "receipts@muravskiy.org"
+    "RECEIPTS_EMAIL": "receipts@muravskiy.org",
+    // OneDrive backup: the "Application (client) ID" of the free Microsoft app
+    // registration (public; see SETUP.md). Empty = backup turned off.
+    "ONEDRIVE_CLIENT_ID": ""
   },
+
+  // Nightly OneDrive backup at about 3:15am Atlanta time (07:15 UTC).
+  "triggers": { "crons": ["15 7 * * *"] },
 
   "observability": { "enabled": true }
 }

@@ -52,6 +52,11 @@ const MIGRATIONS = [
     `ALTER TABLE expenses ADD COLUMN source_hash TEXT`,
     `CREATE TABLE IF NOT EXISTS not_duplicates (a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY (a, b))`,
   ],
+  // 4: OneDrive backup — where and when each file was copied
+  [
+    `ALTER TABLE files ADD COLUMN backup_path TEXT`,
+    `ALTER TABLE files ADD COLUMN backup_at TEXT`,
+  ],
 ];
 
 let ready = false;
