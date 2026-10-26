@@ -3,12 +3,14 @@
 import { getSetting, setSetting, one } from '../db.js';
 import { esc, splitList } from '../util.js';
 import { page, flashFrom } from '../views/layout.js';
-import { DEFAULT_PAID_WITH } from './expenses.js';
+import { DEFAULT_PAID_WITH, getPersonHsa } from './expenses.js';
 import { authConfigured, allowedEmails } from '../auth.js';
 import { getAccounts, saveAccounts, MAX_ACCOUNTS } from '../accounts.js';
 
 export async function settingsPage(env, user, url) {
-  const people = splitList(await getSetting(env, 'people', '')).join(', ');
+  const peopleList = splitList(await getSetting(env, 'people', ''));
+  const people = peopleList.join(', ');
+  const personHsa = await getPersonHsa(env);
   const paidWith = splitList(await getSetting(env, 'paid_with', DEFAULT_PAID_WITH)).join(', ');
   const accounts = await getAccounts(env);
   const files = await one(env, 'SELECT COUNT(*) n, COALESCE(SUM(size), 0) s FROM files');
@@ -40,6 +42,15 @@ export async function settingsPage(env, user, url) {
       <label for="people">Family members (patients)</label>
       <input id="people" name="people" value="${esc(people)}" placeholder="e.g. me, my wife, our kids' names">
       <p class="hint">Separate names with commas. They appear in the Person list.</p>
+      ${accounts.length > 1 && peopleList.length
+        ? `<label>Usual HSA for each person</label>
+           <p class="hint">Picking this person on a receipt switches it to their usual HSA (you can still change it). Either HSA can legally pay for you, your spouse or your dependents.</p>
+           <div class="tablewrap"><table>${peopleList
+             .map((p) => `<tr><td>${esc(p)}<input type="hidden" name="ph_name" value="${esc(p)}"></td><td><select name="ph_acct" aria-label="Usual HSA for ${esc(p)}"><option value="">Whoever adds it</option>${accounts
+               .map((a) => `<option value="${esc(a.id)}" ${personHsa[p.toLowerCase()] === a.id ? 'selected' : ''}>${esc(a.name)}'s HSA</option>`)
+               .join('')}</select></td></tr>`)
+             .join('')}</table></div>`
+        : ''}
       <label for="paid_with">Ways you pay</label>
       <textarea id="paid_with" name="paid_with" rows="3">${esc(paidWith)}</textarea>
       <p class="hint">Separate with commas. Anything containing "HSA" counts as paid by the HSA (nothing to reimburse).</p>
@@ -82,7 +93,18 @@ export async function saveSettings(env, form) {
   }
   if (new Set(accounts.map((a) => a.email).filter(Boolean)).size !== accounts.filter((a) => a.email).length) return { error: 'Each HSA needs a different email.' };
   await saveAccounts(env, accounts);
-  await setSetting(env, 'people', splitList(form.people).map((s) => s.slice(0, 60)).slice(0, 20).join(', '));
+  const peopleList = splitList(form.people).map((s) => s.slice(0, 60)).slice(0, 20);
+  await setSetting(env, 'people', peopleList.join(', '));
+  // Usual HSA per person (only for people still on the list, and HSAs that exist).
+  const map = {};
+  const phNames = arr(form.ph_name);
+  const picks = arr(form.ph_acct);
+  phNames.forEach((n, i) => {
+    const key = String(n).trim().toLowerCase();
+    const id = String(picks[i] || '');
+    if (key && peopleList.some((p) => p.toLowerCase() === key) && accounts.some((a) => a.id === id)) map[key] = id;
+  });
+  await setSetting(env, 'person_hsa', JSON.stringify(map));
   await setSetting(env, 'paid_with', splitList(form.paid_with).map((s) => s.slice(0, 60)).slice(0, 30).join(', '));
   return { ok: true };
 }

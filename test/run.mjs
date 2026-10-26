@@ -491,6 +491,43 @@ await step('two HSA accounts: separate totals, filters, picker and export folder
   assert.match(msgOf(r.location), /different email/);
 });
 
+await step('kids as people: usual HSA per person, moving them, and a by-person report', async () => {
+  const twoAccts = accountsForm([['1', 'Alex', 'me@x.test', 'Fidelity', 'https://www.fidelity.com'], ['2', 'Maria', 'wife@x.test', 'HealthEquity', 'https://www.healthequity.com']]);
+  let r = await req('POST', '/settings', { ...twoAccts, people: 'Alex, Maria, Max, Sam', paid_with: 'Aven', ph_name: ['Alex', 'Maria', 'Max', 'Sam', 'Ghost'], ph_acct: ['', '', '2', '2', '1'] });
+  assert.match(msgOf(r.location), /Settings saved/);
+  const s = await req('GET', '/settings');
+  assert.match(s.text, /Usual HSA for each person/);
+  assert.match(s.text, /name="ph_name" value="Max"><\/td><td><select name="ph_acct"[^>]*><option value="">Whoever adds it<\/option><option value="1" >Alex's HSA<\/option><option value="2" selected>/);
+  // The edit page knows each kid's usual HSA and loads the switcher.
+  const blank = await req('POST', '/new/blank', { account: '1' });
+  const kid = Number(blank.location.match(/\/e\/(\d+)\/edit/)[1]);
+  const edit = await req('GET', `/e/${kid}/edit`);
+  assert.match(edit.text, /data-person-hsa="\{&quot;max&quot;:&quot;2&quot;,&quot;sam&quot;:&quot;2&quot;\}"/);
+  assert.match(edit.text, /\/static\/person\.js/);
+  // Saved under Alex's HSA by hand, then moved to Alex for good.
+  await req('POST', `/e/${kid}/edit`, { account: '2', service_date: '2026-09-30', provider: 'Pediatric Dentistry', amount: '60.00', patient: 'Sam', category: 'Dental' });
+  const kid2 = Number((await req('POST', '/new/blank', { account: '1' })).location.match(/\/e\/(\d+)\/edit/)[1]);
+  await req('POST', `/e/${kid2}/edit`, { account: '1', service_date: '2026-10-01', provider: 'CVS Pharmacy', amount: '9.99', patient: 'Sam' });
+  const list = await req('GET', '/?status=open&person=Sam');
+  assert.match(list.text, /Move Sam's receipts to another HSA\?/);
+  assert.match(list.text, /Maria: 1/);
+  r = await req('POST', '/move', { person: 'Sam', account: '1', default: '1' });
+  assert.match(msgOf(r.location), /Moved 1 receipt for Sam to Alex's HSA/);
+  assert.deepEqual(q(`SELECT DISTINCT account FROM expenses WHERE patient = 'Sam' AND status = 'open'`).map((x) => x.account), ['1']);
+  const edit2 = await req('GET', `/e/${kid}/edit`);
+  assert.match(edit2.text, /&quot;sam&quot;:&quot;1&quot;/);
+  // A reimbursed receipt stays where it was paid.
+  await req('POST', `/e/${kid2}/reimburse`, { reimbursed_date: '2026-10-20', reimbursed_amount: '9.99' });
+  await req('POST', '/move', { person: 'Sam', account: '2' });
+  assert.equal(q('SELECT account FROM expenses WHERE id = ?', kid2)[0].account, '1');
+  assert.equal(q('SELECT account FROM expenses WHERE id = ?', kid)[0].account, '2');
+  assert.match(msgOf((await req('POST', '/move', { person: '', account: '2' })).location), /Pick a person/);
+  // By-person report on the Export page.
+  const exp = await req('GET', '/export');
+  assert.match(exp.text, /<h2>By person<\/h2>/);
+  assert.match(exp.text, />Sam<\/a><\/td><td class="num">2<\/td><td class="num">\$69\.99<\/td><td class="num">\$9\.99<\/td><td class="num">\$60\.00<\/td>/);
+});
+
 console.log('Email in');
 
 const VERIFIED = 'ARC-Authentication-Results: i=1; mx.cloudflare.net; dkim=pass header.d=x.test header.s=s1; dmarc=pass header.from=x.test policy.dmarc=reject; spf=pass smtp.mailfrom=wife@x.test';

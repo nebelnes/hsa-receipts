@@ -1,7 +1,7 @@
 // Receipts: list, add (camera / files / share from a scanner app), edit,
 // mark reimbursed, export.
 
-import { all, one, run, getSetting } from '../db.js';
+import { all, one, run, getSetting, setSetting } from '../db.js';
 import { esc, moneyExact, isDate, today, niceDate, num, list, splitList } from '../util.js';
 import { page, errorPage, flashFrom } from '../views/layout.js';
 import { saveFiles, filesFor, countUploads, KINDS, deleteExpenseFiles } from '../files.js';
@@ -33,7 +33,18 @@ export async function lists(env) {
     people: splitList(await getSetting(env, 'people', '')),
     paidWith: splitList(await getSetting(env, 'paid_with', DEFAULT_PAID_WITH)),
     accounts: await getAccounts(env),
+    personHsa: await getPersonHsa(env),
   };
+}
+
+// Default HSA for each family member, e.g. kids → mom's HSA. Keys are lowercased names.
+export async function getPersonHsa(env) {
+  try {
+    const m = JSON.parse((await getSetting(env, 'person_hsa', '')) || '{}');
+    return m && typeof m === 'object' ? m : {};
+  } catch {
+    return {};
+  }
 }
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -142,6 +153,23 @@ export async function listPage(env, user, url) {
       </form>`
     : '';
 
+  // Changing which HSA pays for someone (e.g. the kids move to the other HSA).
+  let moveForm = '';
+  if (multi && person) {
+    const waiting = await all(env, `SELECT account, COUNT(*) n, COALESCE(SUM(amount), 0) s FROM expenses WHERE patient = ? AND status IN ('open','draft') GROUP BY account`, person);
+    const n = waiting.reduce((s, r) => s + r.n, 0);
+    if (n) {
+      moveForm = `<form class="card" method="post" action="/move">
+        <strong>Move ${esc(person)}'s receipts to another HSA?</strong>
+        <p class="hint">Moves the ${plural(n, 'receipt')} not reimbursed yet (${waiting.map((w) => `${esc(accountName(accounts, w.account))}: ${w.n}`).join(', ')}). Reimbursed ones stay where they were paid.</p>
+        <input type="hidden" name="person" value="${esc(person)}">
+        <div class="row"><div><label for="move-to">Move to</label><select id="move-to" name="account">${accounts.map((a) => `<option value="${esc(a.id)}">${esc(a.name)}'s HSA</option>`).join('')}</select></div></div>
+        <label class="small" style="font-weight:500"><input type="checkbox" name="default" value="1" checked>Also make it ${esc(person)}'s usual HSA for new receipts</label>
+        <button type="submit" class="ghost">Move</button>
+      </form>`;
+    }
+  }
+
   const perAccount = multi
     ? accounts
         .map((a) => {
@@ -159,7 +187,7 @@ export async function listPage(env, user, url) {
     </div>
     <a class="btn big" href="/new">＋ Add receipt</a>
     ${drafts.n && status !== 'draft' ? `<div class="banner warn">${drafts.n} receipt${drafts.n === 1 ? ' is' : 's are'} missing the date, provider or amount. <a href="/?status=draft">Finish ${drafts.n === 1 ? 'it' : 'them'}</a>.</div>` : ''}
-    ${filters}${table}${bulkForm}`;
+    ${filters}${table}${bulkForm}${moveForm}`;
   return page({ title: 'Receipts', active: 'list', user, body, flash: flashFrom(url), scripts: bulk ? ['/static/list.js'] : [] });
 }
 
@@ -321,7 +349,7 @@ export async function editPage(env, user, url, id) {
   const e = await getExpense(env, id);
   if (!e) return null;
   const files = await filesFor(env, id);
-  const { people, paidWith, accounts } = await lists(env);
+  const { people, paidWith, accounts, personHsa } = await lists(env);
   const providers = (await all(env, `SELECT DISTINCT provider FROM expenses WHERE provider IS NOT NULL AND provider != '' ORDER BY provider LIMIT 200`)).map((r) => r.provider);
   const readable = files.find((f) => f.type.startsWith('image/') && !/hei[cf]/.test(f.type)) || files.find((f) => f.type === 'application/pdf');
   const auto = url.searchParams.get('read') === '1' && readable;
@@ -340,8 +368,9 @@ export async function editPage(env, user, url, id) {
   const body = `<p><a href="/e/${id}">← Back</a></p>
     <h1>${e.status === 'draft' ? 'Receipt details' : 'Edit receipt'}</h1>
     ${reader}
-    <form class="card" method="post" action="/e/${id}/edit">
+    <form class="card" method="post" action="/e/${id}/edit" data-person-hsa="${esc(JSON.stringify(personHsa))}">
       ${accountPicker(accounts, e.account || accounts[0]?.id)}
+      ${accounts.length > 1 ? '<p id="acct-note" class="hint" role="status"></p>' : ''}
       <div class="row">
         <div><label for="service_date">Date of service</label><input id="service_date" type="date" name="service_date" value="${v('service_date')}"></div>
         <div><label for="amount">Amount you paid ($)</label><input id="amount" name="amount" inputmode="decimal" placeholder="0.00" value="${e.amount ?? ''}"></div>
@@ -363,7 +392,8 @@ export async function editPage(env, user, url, id) {
       <button type="submit">Save</button>
     </form>
     ${files.length ? '' : `<form class="card" method="post" action="/e/${id}/files" enctype="multipart/form-data"><label for="more">Attach the receipt</label><input id="more" type="file" name="files" accept="image/*,application/pdf,.pdf,.heic" multiple required><input type="hidden" name="kind" value="receipt"><input type="hidden" name="back" value="edit"><button type="submit">Upload</button></form>`}`;
-  return page({ title: 'Receipt details', active: 'new', user, body, flash: flashFrom(url), scripts: readable ? ['/static/edit.js'] : [] });
+  const scripts = [...(readable ? ['/static/edit.js'] : []), ...(accounts.length > 1 ? ['/static/person.js'] : [])];
+  return page({ title: 'Receipt details', active: 'new', user, body, flash: flashFrom(url), scripts });
 }
 
 // Saves the form. Returns { id, status } or { error }.
@@ -457,6 +487,21 @@ export async function bulkReimburse(env, form) {
   return { count: rows.length, total: rows.reduce((s, r) => s + (Number(r.amount) || 0), 0) };
 }
 
+// Moves a person's not-yet-reimbursed receipts to another HSA.
+export async function movePerson(env, form) {
+  const accounts = await getAccounts(env);
+  const person = String(form.person || '').trim();
+  const acct = validAccount(accounts, form.account);
+  if (!person || !acct) return { error: 'Pick a person and an HSA.' };
+  const r = await run(env, `UPDATE expenses SET account = ?, updated_at = datetime('now') WHERE patient = ? AND status IN ('open','draft') AND account IS NOT ?`, acct, person, acct);
+  if (form.default === '1') {
+    const map = await getPersonHsa(env);
+    map[person.toLowerCase()] = acct;
+    await setSetting(env, 'person_hsa', JSON.stringify(map));
+  }
+  return { moved: r.meta.changes || 0, to: accountName(accounts, acct), person };
+}
+
 export async function deleteExpense(env, id, form) {
   if (form.confirm !== '1') return { error: 'Tick the box to confirm.' };
   await deleteExpenseFiles(env, id);
@@ -526,13 +571,28 @@ export async function exportPage(env, user, url) {
             COALESCE(SUM(CASE WHEN status = 'hsa_paid' THEN amount END), 0) AS hsa
        FROM expenses WHERE status != 'draft' GROUP BY ${multi ? 'account, ' : ''}y ORDER BY y DESC, account`,
   );
+  const byPerson = await all(
+    env,
+    `SELECT substr(COALESCE(service_date, created_at), 1, 4) AS y, COALESCE(NULLIF(patient, ''), '—') AS p, COUNT(*) AS n,
+            COALESCE(SUM(amount), 0) AS total,
+            COALESCE(SUM(CASE WHEN status = 'open' THEN amount END), 0) AS open,
+            COALESCE(SUM(CASE WHEN status IN ('reimbursed', 'hsa_paid') THEN COALESCE(reimbursed_amount, amount) END), 0) AS done
+       FROM expenses WHERE status != 'draft' GROUP BY y, p ORDER BY y DESC, p`,
+  );
   const files = await one(env, 'SELECT COUNT(*) n, COALESCE(SUM(size), 0) s FROM files');
   const mb = (files.s / 1048576).toFixed(1);
+  const personTable = byPerson.length
+    ? `<h2>By person</h2><div class="card tablewrap"><table>
+      <thead><tr><th>Year</th><th>Person</th><th class="num">Receipts</th><th class="num">Total paid</th><th class="num">Paid back or HSA card</th><th class="num">Not reimbursed</th></tr></thead>
+      <tbody>${byPerson.map((r) => `<tr><td>${esc(r.y)}</td><td><a href="/?status=all&year=${esc(r.y)}&person=${encodeURIComponent(r.p === '—' ? '' : r.p)}">${esc(r.p)}</a></td><td class="num">${r.n}</td><td class="num">${moneyExact(r.total)}</td><td class="num">${moneyExact(r.done)}</td><td class="num">${moneyExact(r.open)}</td></tr>`).join('')}</tbody>
+    </table></div>`
+    : '';
   const body = `<h1>Export</h1>
     <div class="card tablewrap"><table>
       <thead><tr><th>Year</th>${multi ? '<th>HSA</th>' : ''}<th class="num">Receipts</th><th class="num">Total paid</th><th class="num">Not reimbursed</th><th class="num">Reimbursed</th><th class="num">HSA card</th></tr></thead>
       <tbody>${years.length ? years.map((y) => `<tr><td>${esc(y.y)}</td>${multi ? `<td>${esc(accountName(accounts, y.account))}</td>` : ''}<td class="num">${y.n}</td><td class="num">${moneyExact(y.total)}</td><td class="num">${moneyExact(y.open)}</td><td class="num">${moneyExact(y.reimbursed)}</td><td class="num">${moneyExact(y.hsa)}</td></tr>`).join('') : `<tr><td colspan="${multi ? 7 : 6}" class="muted">No finished receipts yet.</td></tr>`}</tbody>
     </table></div>
+    ${personTable}
     <div class="card">
       <a class="btn" href="/export.csv">Download list (CSV)</a>
       <button type="button" id="zip" ${files.n ? '' : 'disabled'}>Download everything (ZIP)</button>

@@ -155,6 +155,11 @@ async function handle(request, env) {
     const r = await ex.deleteExpense(env, id, await readForm(request));
     return redirect(r.error ? withMsg(`/e/${id}`, r.error, 'bad') : withMsg('/', 'Receipt deleted.'));
   }
+  if (path === '/move' && method === 'POST') {
+    const r = await ex.movePerson(env, await readForm(request));
+    if (r.error) return redirect(withMsg('/', r.error, 'bad'));
+    return redirect(withMsg(`/?status=open&person=${encodeURIComponent(r.person)}`, `Moved ${r.moved} receipt${r.moved === 1 ? '' : 's'} for ${r.person} to ${r.to}'s HSA.`));
+  }
   if (path === '/reimburse' && method === 'POST') {
     const r = await ex.bulkReimburse(env, await readForm(request));
     if (r.error) return redirect(withMsg('/', r.error, 'bad'));
