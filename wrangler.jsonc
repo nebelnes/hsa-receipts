@@ -25,7 +25,7 @@
     // Same Cloudflare Access team as trips.muravskiy.org.
     // ACCESS_AUD comes from the new "hsa" Access application (see SETUP.md).
     "ACCESS_TEAM_DOMAIN": "morning-tree-1737.cloudflareaccess.com",
-    "ACCESS_AUD": "",
+    "ACCESS_AUD": "71df6b6d02b08d1ae41cd0d812688149af5c1794c46bb955f9d73c545e52f3fc",
     "ALLOWED_EMAILS": "nebelnes@gmail.com",
     "SITE_URL": "https://hsa.muravskiy.org"
   },
